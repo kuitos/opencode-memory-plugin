@@ -1,6 +1,14 @@
 import { readFileSync, writeFileSync, readdirSync, unlinkSync, existsSync } from "fs"
 import { join, basename } from "path"
-import { getMemoryDir, getMemoryEntrypoint, ENTRYPOINT_NAME } from "./paths.js"
+import {
+  getMemoryDir,
+  getMemoryEntrypoint,
+  ENTRYPOINT_NAME,
+  validateMemoryFileName,
+  MAX_MEMORY_FILES,
+  MAX_MEMORY_FILE_BYTES,
+  FRONTMATTER_MAX_LINES,
+} from "./paths.js"
 
 export const MEMORY_TYPES = ["user", "feedback", "project", "reference"] as const
 export type MemoryType = (typeof MEMORY_TYPES)[number]
@@ -21,10 +29,19 @@ function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; c
     return { frontmatter: {}, content: trimmed }
   }
 
-  const endIndex = trimmed.indexOf("---", 3)
-  if (endIndex === -1) {
+  const lines = trimmed.split("\n")
+  let closingLineIdx = -1
+  for (let i = 1; i < Math.min(lines.length, FRONTMATTER_MAX_LINES); i++) {
+    if (lines[i].trimEnd() === "---") {
+      closingLineIdx = i
+      break
+    }
+  }
+  if (closingLineIdx === -1) {
     return { frontmatter: {}, content: trimmed }
   }
+
+  const endIndex = lines.slice(0, closingLineIdx).join("\n").length + 1
 
   const frontmatterBlock = trimmed.slice(3, endIndex).trim()
   const content = trimmed.slice(endIndex + 3).trim()
@@ -61,6 +78,7 @@ export function listMemories(worktree: string): MemoryEntry[] {
     files = readdirSync(memDir)
       .filter((f) => f.endsWith(".md") && f !== ENTRYPOINT_NAME)
       .sort()
+      .slice(0, MAX_MEMORY_FILES)
   } catch {
     return entries
   }
@@ -88,8 +106,9 @@ export function listMemories(worktree: string): MemoryEntry[] {
 }
 
 export function readMemory(worktree: string, fileName: string): MemoryEntry | null {
+  const safeName = validateMemoryFileName(fileName)
   const memDir = getMemoryDir(worktree)
-  const filePath = join(memDir, fileName.endsWith(".md") ? fileName : `${fileName}.md`)
+  const filePath = join(memDir, safeName)
 
   try {
     const rawContent = readFileSync(filePath, "utf-8")
@@ -116,11 +135,16 @@ export function saveMemory(
   type: MemoryType,
   content: string,
 ): string {
+  const safeName = validateMemoryFileName(fileName)
   const memDir = getMemoryDir(worktree)
-  const safeName = fileName.endsWith(".md") ? fileName : `${fileName}.md`
   const filePath = join(memDir, safeName)
 
   const fileContent = `${buildFrontmatter(name, description, type)}\n\n${content.trim()}\n`
+  if (Buffer.byteLength(fileContent, "utf-8") > MAX_MEMORY_FILE_BYTES) {
+    throw new Error(
+      `Memory file content exceeds the ${MAX_MEMORY_FILE_BYTES}-byte limit`,
+    )
+  }
   writeFileSync(filePath, fileContent, "utf-8")
 
   updateIndex(worktree, safeName, name, description)
@@ -129,8 +153,8 @@ export function saveMemory(
 }
 
 export function deleteMemory(worktree: string, fileName: string): boolean {
+  const safeName = validateMemoryFileName(fileName)
   const memDir = getMemoryDir(worktree)
-  const safeName = fileName.endsWith(".md") ? fileName : `${fileName}.md`
   const filePath = join(memDir, safeName)
 
   try {

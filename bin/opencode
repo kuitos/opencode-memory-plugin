@@ -125,6 +125,22 @@ log() {
   echo "[opencode-memory] $*" >&2
 }
 
+has_new_memories() {
+  # Check if any memory file was modified during the session
+  # Checks all projects' memory directories for files newer than the timestamp marker
+  local mem_base="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
+  
+  if [ ! -d "$mem_base" ]; then
+    return 1
+  fi
+  
+  # Find any .md file under projects/*/memory/ newer than our timestamp
+  local newer_files
+  newer_files=$(find "$mem_base" -path "*/memory/*.md" -newer "$TIMESTAMP_FILE" 2>/dev/null | head -1)
+  
+  [ -n "$newer_files" ]
+}
+
 get_latest_session_id() {
   local session_json
   session_json=$("$REAL_OPENCODE" session list --format json -n 1 2>/dev/null) || return 1
@@ -155,6 +171,10 @@ acquire_lock() {
 
 release_lock() {
   rm -f "$LOCK_FILE"
+}
+
+cleanup_timestamp() {
+  rm -f "$TIMESTAMP_FILE"
 }
 
 run_extraction() {
@@ -190,12 +210,16 @@ run_extraction() {
 # Main
 # ============================================================================
 
+# Step 0: Create timestamp marker before running opencode
+TIMESTAMP_FILE=$(mktemp)
+
 # Step 1: Run the real opencode with all original arguments, capture exit code
 opencode_exit=0
 "$REAL_OPENCODE" "$@" || opencode_exit=$?
 
 # Step 2: Check if extraction is enabled
 if [ "$EXTRACT_ENABLED" = "0" ]; then
+  cleanup_timestamp
   exit $opencode_exit
 fi
 
@@ -204,11 +228,20 @@ session_id=$(get_latest_session_id)
 
 if [ -z "$session_id" ]; then
   log "No session found, skipping memory extraction"
+  cleanup_timestamp
+  exit $opencode_exit
+fi
+
+# Step 3.5: Check if memories were already written during the session
+if has_new_memories; then
+  log "Main agent already wrote memories during session, skipping extraction"
+  cleanup_timestamp
   exit $opencode_exit
 fi
 
 # Step 4: Acquire lock (prevent concurrent extractions)
 if ! acquire_lock; then
+  cleanup_timestamp
   exit $opencode_exit
 fi
 
@@ -216,11 +249,13 @@ fi
 if [ "$FOREGROUND" = "1" ]; then
   # Foreground mode (for debugging)
   run_extraction "$session_id"
+  cleanup_timestamp
 else
   # Background mode (default) — user isn't blocked
   run_extraction "$session_id" &
   disown
   log "Memory extraction started in background (PID $!)"
+  cleanup_timestamp
 fi
 
 exit $opencode_exit

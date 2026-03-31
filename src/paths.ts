@@ -10,6 +10,35 @@ export const ENTRYPOINT_NAME = "MEMORY.md"
 export const MAX_ENTRYPOINT_LINES = 200
 export const MAX_ENTRYPOINT_BYTES = 25_000
 
+export const MAX_MEMORY_FILES = 200
+export const MAX_MEMORY_FILE_BYTES = 40_000
+export const FRONTMATTER_MAX_LINES = 30
+
+export function validateMemoryFileName(fileName: string): string {
+  const base = fileName.endsWith(".md") ? fileName.slice(0, -3) : fileName
+
+  if (base.length === 0) {
+    throw new Error("Memory file name cannot be empty")
+  }
+  if (base.includes("/") || base.includes("\\")) {
+    throw new Error(`Memory file name must not contain path separators: ${fileName}`)
+  }
+  if (base.includes("..")) {
+    throw new Error(`Memory file name must not contain path traversal: ${fileName}`)
+  }
+  if (base.includes("\0")) {
+    throw new Error(`Memory file name must not contain null bytes: ${fileName}`)
+  }
+  if (base.startsWith(".")) {
+    throw new Error(`Memory file name must not start with '.': ${fileName}`)
+  }
+  if (base.toUpperCase() === "MEMORY") {
+    throw new Error(`'MEMORY' is a reserved name and cannot be used as a memory file name`)
+  }
+
+  return `${base}.md`
+}
+
 const MAX_SANITIZED_LENGTH = 200
 
 // Exact copy of Claude Code's djb2Hash() from utils/hash.ts

@@ -1,5 +1,5 @@
 import { MEMORY_TYPES } from "./memory.js"
-import { readIndex, truncateEntrypoint, listMemories } from "./memory.js"
+import { readIndex, truncateEntrypoint } from "./memory.js"
 import { getMemoryDir, ENTRYPOINT_NAME } from "./paths.js"
 
 const FRONTMATTER_EXAMPLE = `\`\`\`markdown
@@ -89,7 +89,7 @@ A memory that names a specific function, file, or flag is a claim that it existe
 
 A memory that summarizes repo state is frozen in time. If the user asks about *recent* or *current* state, prefer \`git log\` or reading the code over recalling the snapshot.`
 
-export function buildMemorySystemPrompt(worktree: string): string {
+export function buildMemorySystemPrompt(worktree: string, recalledMemoriesSection?: string): string {
   const memoryDir = getMemoryDir(worktree)
   const indexContent = readIndex(worktree)
 
@@ -137,6 +137,10 @@ export function buildMemorySystemPrompt(worktree: string): string {
       "",
       `Your ${ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here.`,
     )
+  }
+
+  if (recalledMemoriesSection?.trim()) {
+    lines.push("", recalledMemoriesSection)
   }
 
   return lines.join("\n")

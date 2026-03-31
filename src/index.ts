@@ -1,15 +1,14 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { buildMemorySystemPrompt } from "./prompt.js"
+import { recallRelevantMemories, formatRecalledMemories } from "./recall.js"
 import {
   saveMemory,
   deleteMemory,
   listMemories,
   searchMemories,
   readMemory,
-  readIndex,
   MEMORY_TYPES,
-  type MemoryType,
 } from "./memory.js"
 import { getMemoryDir } from "./paths.js"
 
@@ -18,7 +17,26 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
 
   return {
     "experimental.chat.system.transform": async (_input, output) => {
-      const memoryPrompt = buildMemorySystemPrompt(worktree)
+      let query: string | undefined
+      if (_input && typeof _input === "object") {
+        const messages = (_input as { messages?: unknown }).messages
+        if (Array.isArray(messages)) {
+          const lastUserMsg = [...messages]
+            .reverse()
+            .find((message) =>
+              message && typeof message === "object" && "role" in message && (message as { role?: unknown }).role === "user",
+            )
+
+          if (lastUserMsg && typeof lastUserMsg === "object" && "content" in lastUserMsg) {
+            const content = (lastUserMsg as { content?: unknown }).content
+            query = typeof content === "string" ? content : JSON.stringify(content)
+          }
+        }
+      }
+
+      const recalled = recallRelevantMemories(worktree, query)
+      const recalledSection = formatRecalledMemories(recalled)
+      const memoryPrompt = buildMemorySystemPrompt(worktree, recalledSection)
       output.system.push(memoryPrompt)
     },
 
