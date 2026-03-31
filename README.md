@@ -2,9 +2,11 @@
 
 # 🧠 opencode-claude-memory
 
-**Cross-session memory plugin for OpenCode — fully compatible with Claude Code**
+**A 1:1 replica of [Claude Code's memory system](https://github.com/anthropics/claude-code) for OpenCode**
 
-*Claude Code writes memories → OpenCode reads them. OpenCode writes memories → Claude Code reads them.*
+*Ported from the original source — same paths, same format, same tools, same prompts. Zero drift.*
+
+Claude Code writes memories → OpenCode reads them. OpenCode writes memories → Claude Code reads them.
 
 [![npm version](https://img.shields.io/npm/v/opencode-claude-memory.svg?style=flat-square)](https://www.npmjs.com/package/opencode-claude-memory)
 [![npm downloads](https://img.shields.io/npm/dm/opencode-claude-memory.svg?style=flat-square)](https://www.npmjs.com/package/opencode-claude-memory)
@@ -128,13 +130,22 @@ The wrapper is a drop-in replacement that:
 3. After you exit, forks the session with a memory extraction prompt
 4. Extraction runs **in the background** — you're never blocked
 
-### Claude Code Compatibility
+### What "1:1 Replica" Means
 
-This plugin uses the **exact same path algorithm** as Claude Code:
+Every core component is ported directly from [Claude Code's source](https://github.com/anthropics/claude-code):
 
-1. Find the canonical git root (resolves worktrees to their main repo)
-2. Sanitize the path with `sanitizePath()` (Claude Code's algorithm, including `djb2Hash` for long paths)
-3. Store in `~/.claude/projects/<sanitized>/memory/`
+| Component | Source |
+|---|---|
+| `sanitizePath()` + `djb2Hash()` | `utils/sessionStoragePortable.ts` |
+| `findGitRoot()` + worktree resolution | `utils/git.ts` |
+| Memory types & frontmatter format | `commands/memory.ts` |
+| System prompt (types, when to save/skip) | `commands/memory.ts` |
+| Extraction prompt (post-session) | Claude Code's memory extraction agent |
+
+This ensures:
+- `~/.claude/projects/<sanitized>/memory/` paths are **byte-identical** to Claude Code's output
+- Git worktrees resolve to the same canonical root
+- Memory files are interchangeable — no migration needed
 
 ## ⚙️ Configuration
 
