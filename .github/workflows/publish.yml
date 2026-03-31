@@ -1,36 +1,29 @@
-name: Publish to npm
+name: Release
 
 on:
   push:
     branches: [main]
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
-      - name: Check if version already published
-        id: check
-        run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} already published, skipping."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Publishing ${PACKAGE_NAME}@${PACKAGE_VERSION}"
-          fi
-
-      - name: Publish
-        if: steps.check.outputs.skip != 'true'
-        run: npm publish --provenance --access public
+      - name: Release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
