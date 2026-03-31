@@ -1,19 +1,69 @@
-# opencode-memory
+<div align="center">
 
-Cross-session memory plugin for [OpenCode](https://opencode.ai) — **fully compatible with Claude Code's memory format**.
+# 🧠 opencode-claude-memory
 
-Claude Code writes memories → OpenCode reads them.  
-OpenCode writes memories → Claude Code reads them.
+**Cross-session memory plugin for OpenCode — fully compatible with Claude Code**
 
-## Features
+*Claude Code writes memories → OpenCode reads them. OpenCode writes memories → Claude Code reads them.*
 
-- **5 tools**: `memory_save`, `memory_delete`, `memory_list`, `memory_search`, `memory_read`
-- **Claude Code compatible**: shares the same `~/.claude/projects/<project>/memory/` directory
-- **Auto-extraction**: shell wrapper that automatically extracts memories after each session
-- **System prompt injection**: existing memories are injected into every conversation
-- **4 memory types**: `user`, `feedback`, `project`, `reference` (same taxonomy as Claude Code)
+[![npm version](https://img.shields.io/npm/v/opencode-claude-memory.svg?style=flat-square)](https://www.npmjs.com/package/opencode-claude-memory)
+[![npm downloads](https://img.shields.io/npm/dm/opencode-claude-memory.svg?style=flat-square)](https://www.npmjs.com/package/opencode-claude-memory)
+[![License](https://img.shields.io/npm/l/opencode-claude-memory.svg?style=flat-square)](https://github.com/kuitos/opencode-claude-memory/blob/main/LICENSE)
 
-## Quick Start
+[Features](#-features) • [Quick Start](#-quick-start) • [How It Works](#-how-it-works) • [Configuration](#%EF%B8%8F-configuration) • [Tools Reference](#-tools-reference)
+
+</div>
+
+---
+
+## ✨ Features
+
+<table>
+<tr>
+<td width="50%">
+
+### 🔄 Claude Code Compatible
+Shares the exact same `~/.claude/projects/<project>/memory/` directory — bidirectional sync out of the box
+
+</td>
+<td width="50%">
+
+### 🛠️ 5 Memory Tools
+`memory_save`, `memory_delete`, `memory_list`, `memory_search`, `memory_read`
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### ⚡ Auto-Extraction
+Drop-in `opencode` wrapper that extracts memories in the background after each session
+
+</td>
+<td width="50%">
+
+### 💉 System Prompt Injection
+Existing memories are automatically injected into every conversation
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 📁 4 Memory Types
+`user`, `feedback`, `project`, `reference` — same taxonomy as Claude Code
+
+</td>
+<td width="50%">
+
+### 🌳 Git Worktree Aware
+Worktrees of the same repo share the same memory directory
+
+</td>
+</tr>
+</table>
+
+## 🚀 Quick Start
 
 ### 1. Install
 
@@ -21,16 +71,11 @@ OpenCode writes memories → Claude Code reads them.
 npm install -g opencode-claude-memory
 ```
 
-This does two things:
+This installs:
+- The **plugin** — memory tools + system prompt injection
+- An `opencode` **wrapper** — auto-extracts memories after each session
 
-- Registers the **plugin** (memory tools + system prompt injection)
-- Places an `opencode` **wrapper** in your global bin that auto-extracts memories after each session
-
-> The wrapper is a drop-in replacement — it finds the real `opencode` binary in `PATH`, runs it normally, then triggers memory extraction in the background when you exit.
-
-### 2. Configure the plugin
-
-Add the plugin to your `opencode.json`:
+### 2. Configure
 
 ```jsonc
 // opencode.json
@@ -41,62 +86,76 @@ Add the plugin to your `opencode.json`:
 
 ### 3. Use
 
-Just run `opencode` as usual. The memory tools are available to the AI agent:
+```bash
+opencode  # just use it as usual
+```
+
+The AI agent can now use memory tools:
 
 - **"Remember that I prefer terse responses"** → saves a `feedback` memory
 - **"What do you remember about me?"** → reads from memory
 - **"Forget the memory about my role"** → deletes a memory
 
-When you exit a session, memories are automatically extracted in the background.
+When you exit, memories are extracted in the background — zero blocking.
 
-### Uninstall
+<details>
+<summary>🗑️ Uninstall</summary>
 
 ```bash
 npm uninstall -g opencode-claude-memory
 ```
 
-This removes both the wrapper and the plugin. Your saved memories in `~/.claude/projects/` are **not** deleted.
+This removes the wrapper and the plugin. Your saved memories in `~/.claude/projects/` are **not** deleted.
 
-## Auto-Extraction
+</details>
 
-The wrapper:
+## 💡 How It Works
 
-1. Finds the real `opencode` binary (skips itself in `PATH`)
-2. Runs it normally with all your arguments
-3. After you exit, finds the most recent session
-4. Forks that session and sends a memory extraction prompt
-5. The extraction runs **in the background** — you're never blocked
-
-### How it works
-
-```
-You run `opencode`
-  → wrapper finds real opencode binary (skipping itself in PATH)
-  → runs real opencode with your arguments
-  → you exit
-  → opencode session list --format json -n 1  (get last session)
-  → opencode run -s <id> --fork "<extraction prompt>"  (background)
-  → memories saved to ~/.claude/projects/<project>/memory/
+```mermaid
+graph LR
+    A[You run opencode] --> B[Wrapper finds real binary]
+    B --> C[Runs opencode normally]
+    C --> D[You exit]
+    D --> E[Get latest session ID]
+    E --> F[Fork session + extract memories]
+    F --> G[Memories saved to ~/.claude/projects/]
 ```
 
-### Environment variables
+The wrapper is a drop-in replacement that:
+
+1. Scans `PATH` to find the real `opencode` binary (skipping itself)
+2. Runs it with all your arguments
+3. After you exit, forks the session with a memory extraction prompt
+4. Extraction runs **in the background** — you're never blocked
+
+### Claude Code Compatibility
+
+This plugin uses the **exact same path algorithm** as Claude Code:
+
+1. Find the canonical git root (resolves worktrees to their main repo)
+2. Sanitize the path with `sanitizePath()` (Claude Code's algorithm, including `djb2Hash` for long paths)
+3. Store in `~/.claude/projects/<sanitized>/memory/`
+
+## ⚙️ Configuration
+
+### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `OPENCODE_MEMORY_EXTRACT` | `1` | Set to `0` to disable auto-extraction |
 | `OPENCODE_MEMORY_FOREGROUND` | `0` | Set to `1` to run extraction in foreground (debugging) |
-| `OPENCODE_MEMORY_MODEL` | *(default)* | Override model for extraction (e.g., `anthropic/claude-sonnet-4-20250514`) |
+| `OPENCODE_MEMORY_MODEL` | *(default)* | Override model for extraction |
 | `OPENCODE_MEMORY_AGENT` | *(default)* | Override agent for extraction |
 
 ### Logs
 
 Extraction logs are written to `$TMPDIR/opencode-memory-logs/extract-*.log`.
 
-### Concurrency safety
+### Concurrency Safety
 
 A file lock prevents multiple extractions from running simultaneously on the same project. Stale locks (from crashed processes) are automatically cleaned up.
 
-## Memory Format
+## 📝 Memory Format
 
 Each memory is a Markdown file with YAML frontmatter:
 
@@ -113,7 +172,7 @@ Skip post-action summaries. User reads diffs directly.
 **How to apply:** Don't summarize changes at the end of responses.
 ```
 
-### Memory types
+### Memory Types
 
 | Type | Description |
 |---|---|
@@ -122,44 +181,19 @@ Skip post-action summaries. User reads diffs directly.
 | `project` | Ongoing work context not derivable from code |
 | `reference` | Pointers to external resources |
 
-### Index file
+<details>
+<summary>📄 Index file (MEMORY.md)</summary>
 
-`MEMORY.md` is an index (not content storage). Each entry is one line:
+`MEMORY.md` is an auto-managed index (not content storage). Each entry is one line:
 
 ```markdown
 - [User prefers terse responses](feedback_terse_responses.md) — Skip summaries, user reads diffs
 - [User is a data scientist](user_role.md) — Focus on observability/logging context
 ```
 
-## Claude Code Compatibility
+</details>
 
-This plugin uses the **exact same path algorithm** as Claude Code:
-
-1. Find the canonical git root (resolves worktrees to their main repo)
-2. Sanitize the path with `sanitizePath()` (Claude Code's algorithm, including `djb2Hash` for long paths)
-3. Store in `~/.claude/projects/<sanitized>/memory/`
-
-This means:
-- Git worktrees of the same repo share the same memory directory
-- The sanitized path matches Claude Code's output exactly
-- Memory files use the same frontmatter format and type taxonomy
-
-## File Structure
-
-```
-opencode-memory/
-├── bin/
-│   └── opencode                # Drop-in wrapper (finds real binary, adds memory extraction)
-├── src/
-│   ├── index.ts                # Plugin entry point (tools + hooks)
-│   ├── memory.ts               # Memory CRUD operations
-│   ├── paths.ts                # Claude-compatible path resolution
-│   └── prompt.ts               # System prompt injection
-├── package.json
-└── tsconfig.json
-```
-
-## Tools Reference
+## 🔧 Tools Reference
 
 ### `memory_save`
 
@@ -167,11 +201,11 @@ Save or update a memory.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `file_name` | string | yes | File name slug (e.g., `user_role`) |
-| `name` | string | yes | Short title |
-| `description` | string | yes | One-line description for relevance matching |
-| `type` | enum | yes | `user`, `feedback`, `project`, or `reference` |
-| `content` | string | yes | Memory content |
+| `file_name` | string | ✅ | File name slug (e.g., `user_role`) |
+| `name` | string | ✅ | Short title |
+| `description` | string | ✅ | One-line description for relevance matching |
+| `type` | enum | ✅ | `user`, `feedback`, `project`, or `reference` |
+| `content` | string | ✅ | Memory content |
 
 ### `memory_delete`
 
@@ -189,6 +223,6 @@ Search memories by keyword across name, description, and content.
 
 Read the full content of a specific memory file.
 
-## License
+## 📄 License
 
-MIT
+[MIT](LICENSE) © [kuitos](https://github.com/kuitos)
