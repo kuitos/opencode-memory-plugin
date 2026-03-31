@@ -35,9 +35,7 @@ Add the plugin to your `opencode.json`:
 ```jsonc
 // opencode.json
 {
-  "plugins": {
-    "memory": "opencode-memory-plugin"
-  }
+  "plugin": ["opencode-memory-plugin"]
 }
 ```
 

@@ -1,5 +1,5 @@
 {
-  "name": "opencode-memory-plugin",
+  "name": "opencode-memory",
   "version": "0.1.0",
   "type": "module",
   "description": "Cross-session memory plugin for OpenCode — Claude Code compatible, persistent, file-based memory",
