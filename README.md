@@ -24,6 +24,8 @@ Claude Code writes memory → OpenCode reads it. OpenCode writes memory → Clau
   Install + enable plugin, then keep using `opencode` as usual.
 - **Local-first, no migration**
   Memory stays as local Markdown files in the same directory Claude Code already uses.
+- **Auto-dream consolidation**
+  Periodically runs a background memory consolidation pass (Claude-style auto-dream gating).
 
 ## 🚀 Quick Start
 
@@ -36,7 +38,7 @@ opencode-memory install   # one-time: installs shell hook
 
 This installs:
 - The **plugin** — memory tools + system prompt injection
-- The `opencode-memory` **CLI** — wraps opencode with post-session memory extraction
+- The `opencode-memory` **CLI** — wraps opencode with automatic memory extraction + auto-dream consolidation
 - A **shell hook** — defines an `opencode()` function in your `.zshrc`/`.bashrc` that delegates to `opencode-memory`
 
 ### 2. Configure
@@ -54,7 +56,7 @@ This installs:
 opencode
 ```
 
-That’s it. Memory extraction runs in the background after each session.
+That’s it. Memory extraction runs in the background after each session, and auto-dream consolidation is checked with time/session gates.
 
 To uninstall:
 
@@ -92,8 +94,10 @@ graph LR
     B --> C[opencode-memory finds real binary]
     C --> D[Runs opencode normally]
     D --> E[You exit]
-    E --> F[Fork session + extract memories]
-    F --> G[Memories saved to ~/.claude/projects/]
+    E --> F[Extract memories if needed]
+    F --> G[Evaluate auto-dream gate]
+    G --> H[Consolidate memories if gate passes]
+    H --> I[Memories saved to ~/.claude/projects/]
 ```
 
 The shell hook defines an `opencode()` function that delegates to `opencode-memory`:
@@ -101,8 +105,11 @@ The shell hook defines an `opencode()` function that delegates to `opencode-memo
 1. Shell function intercepts `opencode` command (higher priority than PATH)
 2. `opencode-memory` finds the real `opencode` binary in PATH
 3. Runs it with all your arguments
-4. After you exit, forks the session with a memory extraction prompt
-5. Extraction runs **in the background** — you're never blocked
+4. After you exit, it checks whether the session already wrote memory files
+5. If needed, it forks the session with a memory extraction prompt
+6. It evaluates the auto-dream gate (default: at least 24h since last consolidation and 5 touched sessions)
+7. If the gate passes, it runs a background consolidation pass to merge/prune memories
+8. Maintenance runs **in the background** unless `OPENCODE_MEMORY_FOREGROUND=1`
 
 ### Compatibility details
 
@@ -137,22 +144,35 @@ File-based memory is transparent, local-first, easy to inspect/diff/back up, and
 
 Yes. Set `OPENCODE_MEMORY_EXTRACT=0`.
 
+### Can I disable auto-dream?
+
+Yes. Set `OPENCODE_MEMORY_AUTODREAM=0`. You can also tune gates with:
+- `OPENCODE_MEMORY_AUTODREAM_MIN_HOURS`
+- `OPENCODE_MEMORY_AUTODREAM_MIN_SESSIONS`
+
 ## 🔧 Configuration
 
 ### Environment variables
 
-- `OPENCODE_MEMORY_EXTRACT` (default `1`): set `0` to disable auto-extraction
-- `OPENCODE_MEMORY_FOREGROUND` (default `0`): set `1` to run extraction in foreground
+- `OPENCODE_MEMORY_EXTRACT` (default `1`): set `0` to disable automatic memory extraction
+- `OPENCODE_MEMORY_FOREGROUND` (default `0`): set `1` to run maintenance in foreground
 - `OPENCODE_MEMORY_MODEL`: override model used for extraction
 - `OPENCODE_MEMORY_AGENT`: override agent used for extraction
+- `OPENCODE_MEMORY_AUTODREAM` (default `1`): set `0` to disable auto-dream consolidation
+- `OPENCODE_MEMORY_AUTODREAM_MIN_HOURS` (default `24`): min hours between consolidation runs
+- `OPENCODE_MEMORY_AUTODREAM_MIN_SESSIONS` (default `5`): min touched sessions since last consolidation
+- `OPENCODE_MEMORY_AUTODREAM_MODEL`: override model used for auto-dream
+- `OPENCODE_MEMORY_AUTODREAM_AGENT`: override agent used for auto-dream
 
 ### Logs
 
-Extraction logs are written to `$TMPDIR/opencode-memory-logs/extract-*.log`.
+Logs are written to `$TMPDIR/opencode-memory-logs/`:
+- `extract-*.log`: automatic memory extraction
+- `dream-*.log`: auto-dream consolidation
 
 ### Concurrency safety
 
-A file lock prevents multiple extractions from running simultaneously on the same project. Stale locks are cleaned up automatically.
+Lock files prevent concurrent extraction/consolidation runs per project root. Stale locks are cleaned up automatically.
 
 ## 📝 Memory format
 
