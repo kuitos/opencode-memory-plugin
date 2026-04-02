@@ -87,7 +87,7 @@ exit 0
     expect(readFileSync(logPath, "utf-8")).toContain("extraction ok")
   })
 
-  test("suppresses terminal maintenance logs when OPENCODE_MEMORY_LOG=0", () => {
+  test("suppresses terminal maintenance logs when OPENCODE_MEMORY_TERMINAL_LOG=0", () => {
     const root = makeTempRoot()
     const fakeBin = join(root, "bin")
     const homeDir = join(root, "home")
@@ -129,7 +129,7 @@ exit 0
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
         OPENCODE_MEMORY_FOREGROUND: "1",
-        OPENCODE_MEMORY_LOG: "0",
+        OPENCODE_MEMORY_TERMINAL_LOG: "0",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
     })
