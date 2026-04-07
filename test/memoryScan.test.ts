@@ -71,6 +71,7 @@ describe("scanMemoryFiles", () => {
 
     const result = scanMemoryFiles(dir)
     expect(result).toHaveLength(1)
+    expect(result[0]!.name).toBe("Code Style")
     expect(result[0]!.description).toBe("User prefers terse responses")
     expect(result[0]!.type).toBe("feedback")
   })
@@ -197,6 +198,7 @@ describe("formatMemoryManifest", () => {
         filename: "user_role.md",
         filePath: "/tmp/memory/user_role.md",
         mtimeMs: new Date("2025-03-15T10:00:00Z").getTime(),
+        name: "User Role",
         description: "User is a senior engineer",
         type: "user",
       },
@@ -214,6 +216,7 @@ describe("formatMemoryManifest", () => {
         filename: "misc.md",
         filePath: "/tmp/memory/misc.md",
         mtimeMs: Date.now(),
+        name: null,
         description: "Some note",
         type: undefined,
       },
@@ -230,6 +233,7 @@ describe("formatMemoryManifest", () => {
         filename: "bare.md",
         filePath: "/tmp/memory/bare.md",
         mtimeMs: Date.now(),
+        name: null,
         description: null,
         type: "feedback",
       },
@@ -246,6 +250,7 @@ describe("formatMemoryManifest", () => {
         filename: "a.md",
         filePath: "/tmp/a.md",
         mtimeMs: Date.now(),
+        name: null,
         description: "First",
         type: "user",
       },
@@ -253,6 +258,7 @@ describe("formatMemoryManifest", () => {
         filename: "b.md",
         filePath: "/tmp/b.md",
         mtimeMs: Date.now(),
+        name: null,
         description: "Second",
         type: "project",
       },

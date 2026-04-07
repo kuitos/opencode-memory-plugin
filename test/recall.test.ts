@@ -93,6 +93,31 @@ describe("recallRelevantMemories", () => {
     expect(result[0]!.fileName).toBe("auth.md")
   })
 
+  test("matches query against frontmatter name", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "auth.md",
+      { name: "Auth Config", description: "Setup note", type: "project" },
+      "Implementation details unrelated to title search",
+      new Date("2024-01-01"),
+    )
+    writeMemoryFile(
+      memDir,
+      "newer.md",
+      { name: "Recent Note", description: "More recent but not matching title", type: "user" },
+      "Fresh unrelated content",
+      new Date("2025-06-01"),
+    )
+
+    const result = recallRelevantMemories(repo, "Auth Config")
+    expect(result).toHaveLength(2)
+    expect(result[0]!.fileName).toBe("auth.md")
+    expect(result[0]!.name).toBe("Auth Config")
+  })
+
   test("respects alreadySurfaced filter", () => {
     const repo = makeTempGitRepo()
     const memDir = getMemoryDir(repo)
@@ -144,6 +169,22 @@ describe("recallRelevantMemories", () => {
     const result = recallRelevantMemories(repo)
     expect(result).toHaveLength(1)
     expect(result[0]!.name).toBe("plain_note")
+  })
+
+  test("prefers frontmatter name over filename slug", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "slug_only.md",
+      { name: "Readable Title", description: "Named memory", type: "user" },
+      "Named content",
+    )
+
+    const result = recallRelevantMemories(repo)
+    expect(result).toHaveLength(1)
+    expect(result[0]!.name).toBe("Readable Title")
   })
 
   test("calculates ageInDays correctly", () => {

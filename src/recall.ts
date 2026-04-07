@@ -43,7 +43,7 @@ function readMemoryContent(filePath: string): string {
 
 function scoreHeader(header: MemoryHeader, content: string, terms: string[]): number {
   if (terms.length === 0) return 0
-  const haystack = `${header.filename}\n${header.description ?? ""}\n${content}`.toLowerCase()
+  const haystack = `${header.name ?? ""}\n${header.filename}\n${header.description ?? ""}\n${content}`.toLowerCase()
   let score = 0
   for (const term of terms) {
     if (haystack.includes(term)) score += 1
@@ -108,7 +108,7 @@ export function recallRelevantMemories(
     const nameFromFilename = header.filename.replace(/\.md$/, "").replace(/.*\//, "")
     return {
       fileName: header.filename,
-      name: nameFromFilename,
+      name: header.name ?? nameFromFilename,
       type: header.type ?? "user",
       description: header.description ?? "",
       content: truncateMemoryContent(content),

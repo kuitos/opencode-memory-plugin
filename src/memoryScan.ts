@@ -12,6 +12,7 @@ export type MemoryHeader = {
   filename: string
   filePath: string
   mtimeMs: number
+  name: string | null
   description: string | null
   type: MemoryType | undefined
 }
@@ -90,6 +91,7 @@ export function scanMemoryFiles(memoryDir: string): MemoryHeader[] {
           filename: relativePath,
           filePath,
           mtimeMs,
+          name: frontmatter.name || null,
           description: frontmatter.description || null,
           type: parseMemoryType(frontmatter.type),
         })

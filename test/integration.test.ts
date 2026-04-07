@@ -71,7 +71,7 @@ describe("end-to-end memory lifecycle", () => {
 
     const recalled = recallRelevantMemories(repo, "testing database mock")
     expect(recalled.length).toBeGreaterThan(0)
-    expect(recalled[0]!.name).toBe("feedback_testing")
+    expect(recalled[0]!.name).toBe("Testing Approach")
 
     const recalledFormatted = formatRecalledMemories(recalled)
     expect(recalledFormatted).toContain("## Recalled Memories")
@@ -120,7 +120,7 @@ describe("end-to-end memory lifecycle", () => {
     const result = recallRelevantMemories(repo, undefined, new Set([seenPath]))
 
     expect(result).toHaveLength(1)
-    expect(result[0]!.name).toBe("unseen")
+    expect(result[0]!.name).toBe("Not Seen")
   })
 
   test("overwriting a memory updates content and index", () => {
