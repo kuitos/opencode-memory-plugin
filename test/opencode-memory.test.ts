@@ -45,7 +45,7 @@ describe("opencode-memory wrapper", () => {
       `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
-  echo '[{"id":"ses_test_123","time":{"updated":1,"created":1}}]'
+  echo '[{"id":"ses_test_123","directory":"${root}","time":{"updated":1,"created":1}}]'
   exit 0
 fi
 if [ "\${1:-}" = "run" ]; then
@@ -69,6 +69,7 @@ exit 0
         HOME: homeDir,
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
         OPENCODE_MEMORY_FOREGROUND: "1",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
@@ -104,7 +105,7 @@ exit 0
       `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
-  echo '[{"id":"ses_test_456","time":{"updated":1,"created":1}}]'
+  echo '[{"id":"ses_test_456","directory":"${root}","time":{"updated":1,"created":1}}]'
   exit 0
 fi
 if [ "\${1:-}" = "run" ]; then
@@ -197,7 +198,7 @@ if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
   if [ ! -f "$STATE_FILE" ]; then
     echo '[{"id":"ses_other_newest","updated":10,"created":10},{"id":"ses_existing_old","updated":1,"created":1}]'
   else
-    echo '[{"id":"ses_other_newest","updated":30,"created":30},{"id":"ses_wrapped_target","updated":20,"created":20},{"id":"ses_existing_old","updated":1,"created":1}]'
+    echo '[{"id":"ses_other_newest","updated":30,"created":30},{"id":"ses_wrapped_target","directory":"${root}","updated":20,"created":20},{"id":"ses_existing_old","updated":1,"created":1}]'
   fi
   exit 0
 fi
@@ -223,6 +224,7 @@ exit 0
         HOME: homeDir,
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
         OPENCODE_MEMORY_FOREGROUND: "1",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
@@ -260,6 +262,12 @@ if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
   echo '[{"id":"ses_other_newest","updated":30,"created":30}]'
   exit 0
 fi
+if [ "\${1:-}" = "export" ]; then
+  cat <<'JSON'
+{"info":{"directory":"${root}"}}
+JSON
+  exit 0
+fi
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
   mkdir -p "$CLAUDE_CONFIG_DIR/transcripts"
   printf '{"type":"user","content":"wrapped"}\n' > "$CLAUDE_CONFIG_DIR/transcripts/ses_wrapped_target.jsonl"
@@ -283,6 +291,7 @@ exit 0
         HOME: homeDir,
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
         OPENCODE_MEMORY_FOREGROUND: "1",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
@@ -320,6 +329,12 @@ if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
   echo '[]'
   exit 0
 fi
+if [ "\${1:-}" = "export" ]; then
+  cat <<'JSON'
+{"info":{"directory":"${root}"}}
+JSON
+  exit 0
+fi
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
   mkdir -p "$CLAUDE_CONFIG_DIR/transcripts"
   (sleep 1; printf '{"type":"user","content":"wrapped"}\n' > "$CLAUDE_CONFIG_DIR/transcripts/ses_delayed_target.jsonl") &
@@ -343,6 +358,7 @@ exit 0
         HOME: homeDir,
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "2",
         OPENCODE_MEMORY_FOREGROUND: "1",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
@@ -379,6 +395,12 @@ if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
   echo '[]'
   exit 0
 fi
+if [ "\${1:-}" = "export" ]; then
+  cat <<'JSON'
+{"info":{"directory":"${root}"}}
+JSON
+  exit 0
+fi
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
   mkdir -p "$HOME/.local/share/opencode/storage/session_diff"
   printf '{"files":[]}\n' > "$HOME/.local/share/opencode/storage/session_diff/ses_storage_target.json"
@@ -402,6 +424,7 @@ exit 0
         HOME: homeDir,
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
         OPENCODE_MEMORY_FOREGROUND: "1",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
@@ -416,6 +439,81 @@ exit 0
     const logPath = join(logDir, logFiles[0] ?? "")
     const logContent = readFileSync(logPath, "utf-8")
     expect(logContent).toContain("fork session:ses_storage_target")
+  })
+
+  test("prefers in-scope session list result over newer out-of-scope artifacts", () => {
+    const root = makeTempRoot()
+    const fakeBin = join(root, "bin")
+    const homeDir = join(root, "home")
+    const tmpDir = join(root, "tmp")
+    const claudeDir = join(root, "claude")
+
+    mkdirSync(fakeBin, { recursive: true })
+    mkdirSync(homeDir, { recursive: true })
+    mkdirSync(tmpDir, { recursive: true })
+    mkdirSync(claudeDir, { recursive: true })
+
+    writeExecutable(
+      join(fakeBin, "opencode"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
+  echo '[{"id":"ses_wrapped_target","updated":10,"created":10,"directory":"${root}"}]'
+  exit 0
+fi
+if [ "\${1:-}" = "export" ]; then
+  if [ "\${2:-}" = "ses_other_repo" ]; then
+    cat <<'JSON'
+{"info":{"directory":"${root}/other-repo"}}
+JSON
+  else
+    cat <<'JSON'
+{"info":{"directory":"${root}"}}
+JSON
+  fi
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
+  mkdir -p "$CLAUDE_CONFIG_DIR/transcripts" "$HOME/.local/share/opencode/storage/session_diff"
+  printf '{"type":"user","content":"wrapped"}\n' > "$CLAUDE_CONFIG_DIR/transcripts/ses_wrapped_target.jsonl"
+  sleep 1
+  printf '{"type":"user","content":"other"}\n' > "$CLAUDE_CONFIG_DIR/transcripts/ses_other_repo.jsonl"
+  echo "main run ok"
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "-s" ]; then
+  echo "fork session:\${3:-}"
+  exit 0
+fi
+exit 0
+`,
+    )
+
+    const result = spawnSync("bash", [scriptPath, "run", "hello"], {
+      cwd: root,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        HOME: homeDir,
+        TMPDIR: tmpDir,
+        CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
+        OPENCODE_MEMORY_FOREGROUND: "1",
+        OPENCODE_MEMORY_AUTODREAM: "0",
+      },
+    })
+
+    expect(result.status).toBe(0)
+
+    const logDir = join(root, "tmp", "opencode-memory-logs")
+    const logFiles = readdirSync(logDir)
+    expect(logFiles).toHaveLength(1)
+
+    const logPath = join(logDir, logFiles[0] ?? "")
+    const logContent = readFileSync(logPath, "utf-8")
+    expect(logContent).toContain("fork session:ses_wrapped_target")
+    expect(logContent).not.toContain("fork session:ses_other_repo")
   })
 
   test("sets OPENCODE_MEMORY_IGNORE for wrapped run prompts that explicitly ignore memory", () => {
@@ -458,6 +556,7 @@ exit 0
           HOME: homeDir,
           TMPDIR: tmpDir,
           CLAUDE_CONFIG_DIR: claudeDir,
+          OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
           OPENCODE_MEMORY_EXTRACT: "0",
           OPENCODE_MEMORY_AUTODREAM: "0",
         },
@@ -487,7 +586,7 @@ exit 0
       `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
-  echo '[{"id":"ses_wrapped_target","updated":10,"created":10}]'
+  echo '[{"id":"ses_wrapped_target","updated":10,"created":10,"directory":"${wrappedDir}"}]'
   exit 0
 fi
 if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
@@ -513,6 +612,7 @@ exit 0
         HOME: homeDir,
         TMPDIR: tmpDir,
         CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
         OPENCODE_MEMORY_FOREGROUND: "1",
         OPENCODE_MEMORY_AUTODREAM: "0",
       },
@@ -527,5 +627,67 @@ exit 0
     const logPath = join(logDir, logFiles[0] ?? "")
     const logContent = readFileSync(logPath, "utf-8")
     expect(logContent).toContain(`fork args:run -s ses_wrapped_target --fork --dir ${wrappedDir}`)
+  })
+
+  test("uses positional project path as wrapped working directory", () => {
+    const root = makeTempRoot()
+    const fakeBin = join(root, "bin")
+    const homeDir = join(root, "home")
+    const tmpDir = join(root, "tmp")
+    const claudeDir = join(root, "claude")
+    const projectDir = join(root, "project-repo")
+
+    mkdirSync(fakeBin, { recursive: true })
+    mkdirSync(homeDir, { recursive: true })
+    mkdirSync(tmpDir, { recursive: true })
+    mkdirSync(claudeDir, { recursive: true })
+    mkdirSync(projectDir, { recursive: true })
+
+    writeExecutable(
+      join(fakeBin, "opencode"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
+  echo '[{"id":"ses_wrapped_target","updated":10,"created":10,"directory":"${projectDir}"}]'
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
+  mkdir -p "$CLAUDE_CONFIG_DIR/transcripts"
+  printf '{"type":"user","content":"wrapped"}\n' > "$CLAUDE_CONFIG_DIR/transcripts/ses_wrapped_target.jsonl"
+  echo "main run ok"
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "-s" ]; then
+  printf 'fork args:%s\n' "$*"
+  exit 0
+fi
+exit 0
+`,
+    )
+
+    const result = spawnSync("bash", [scriptPath, projectDir], {
+      cwd: root,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        HOME: homeDir,
+        TMPDIR: tmpDir,
+        CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
+        OPENCODE_MEMORY_FOREGROUND: "1",
+        OPENCODE_MEMORY_AUTODREAM: "0",
+      },
+    })
+
+    expect(result.status).toBe(0)
+
+    const logDir = join(root, "tmp", "opencode-memory-logs")
+    const logFiles = readdirSync(logDir)
+    expect(logFiles).toHaveLength(1)
+
+    const logPath = join(logDir, logFiles[0] ?? "")
+    const logContent = readFileSync(logPath, "utf-8")
+    expect(logContent).toContain(`fork args:run -s ses_wrapped_target --fork --dir ${projectDir}`)
   })
 })
