@@ -441,6 +441,73 @@ exit 0
     expect(logContent).toContain("fork session:ses_storage_target")
   })
 
+  test("parses large export payloads without exceeding argv limits", () => {
+    const root = makeTempRoot()
+    const fakeBin = join(root, "bin")
+    const homeDir = join(root, "home")
+    const tmpDir = join(root, "tmp")
+    const claudeDir = join(root, "claude")
+
+    mkdirSync(fakeBin, { recursive: true })
+    mkdirSync(homeDir, { recursive: true })
+    mkdirSync(tmpDir, { recursive: true })
+    mkdirSync(claudeDir, { recursive: true })
+
+    writeExecutable(
+      join(fakeBin, "opencode"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
+  echo '[]'
+  exit 0
+fi
+if [ "\${1:-}" = "export" ]; then
+  python3 - <<'PY'
+import json
+print(json.dumps({"info": {"directory": "${root}"}, "padding": "x" * 400000}))
+PY
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" != "-s" ]; then
+  mkdir -p "$HOME/.local/share/opencode/storage/session_diff"
+  printf '{"files":[]}\n' > "$HOME/.local/share/opencode/storage/session_diff/ses_large_export.json"
+  echo "main run ok"
+  exit 0
+fi
+if [ "\${1:-}" = "run" ] && [ "\${2:-}" = "-s" ]; then
+  echo "fork session:\${3:-}"
+  exit 0
+fi
+exit 0
+`,
+    )
+
+    const result = spawnSync("bash", [scriptPath, "run", "hello"], {
+      cwd: root,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        HOME: homeDir,
+        TMPDIR: tmpDir,
+        CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "1",
+        OPENCODE_MEMORY_FOREGROUND: "1",
+        OPENCODE_MEMORY_AUTODREAM: "0",
+      },
+    })
+
+    expect(result.status).toBe(0)
+
+    const logDir = join(root, "tmp", "opencode-memory-logs")
+    const logFiles = readdirSync(logDir)
+    expect(logFiles).toHaveLength(1)
+
+    const logPath = join(logDir, logFiles[0] ?? "")
+    const logContent = readFileSync(logPath, "utf-8")
+    expect(logContent).toContain("fork session:ses_large_export")
+  })
+
   test("prefers in-scope session list result over newer out-of-scope artifacts", () => {
     const root = makeTempRoot()
     const fakeBin = join(root, "bin")

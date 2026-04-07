@@ -568,19 +568,26 @@ get_storage_session_diff_dir() {
 
 resolve_session_directory() {
   local session_id="$1"
-  local output
+  local output_file
 
-  output=$("$REAL_OPENCODE" export "$session_id" 2>/dev/null || true)
-  if [ -z "$output" ]; then
+  output_file=$(mktemp)
+  if ! "$REAL_OPENCODE" export "$session_id" >"$output_file" 2>/dev/null; then
+    rm -f "$output_file"
+    return 1
+  fi
+
+  if [ ! -s "$output_file" ]; then
+    rm -f "$output_file"
     return 1
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$output" <<'PY'
+    python3 - "$output_file" <<'PY'
 import json
+from pathlib import Path
 import sys
 
-raw = sys.argv[1]
+raw = Path(sys.argv[1]).read_text()
 start = raw.find('{')
 if start == -1:
     raise SystemExit(1)
@@ -594,9 +601,12 @@ directory = ((data.get("info") or {}).get("directory") or "")
 if directory:
     print(directory)
 PY
-    return 0
+    local status=$?
+    rm -f "$output_file"
+    return $status
   fi
 
+  rm -f "$output_file"
   return 1
 }
 
