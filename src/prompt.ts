@@ -1,6 +1,6 @@
 import { MEMORY_TYPES } from "./memory.js"
 import { readIndex, truncateEntrypoint } from "./memory.js"
-import { getMemoryDir, ENTRYPOINT_NAME, MAX_ENTRYPOINT_LINES } from "./paths.js"
+import { getMemoryDir, ENTRYPOINT_NAME, MAX_ENTRYPOINT_LINES, getProjectDir } from "./paths.js"
 
 // Port of Claude Code's MEMORY_FRONTMATTER_EXAMPLE from memoryTypes.ts
 const FRONTMATTER_EXAMPLE = [
@@ -120,6 +120,29 @@ const TRUSTING_RECALL = [
   "A memory that summarizes repo state (activity logs, architecture snapshots) is frozen in time. If the user asks about *recent* or *current* state, prefer `git log` or reading the code over recalling the snapshot.",
 ].join("\n")
 
+// Port of Claude Code's buildSearchingPastContextSection() from memdir.ts.
+// Guides the model to grep memory files and session transcripts when
+// looking for past context, rather than guessing or hallucinating.
+function buildSearchingPastContextSection(memoryDir: string, projectDir: string): string[] {
+  const memSearch = `grep -rn "<search term>" ${memoryDir} --include="*.md"`
+  const transcriptSearch = `grep -rn "<search term>" ${projectDir}/ --include="*.jsonl"`
+  return [
+    "## Searching past context",
+    "",
+    "When looking for past context:",
+    "1. Search topic files in your memory directory:",
+    "```",
+    memSearch,
+    "```",
+    "2. Session transcript logs (last resort — large files, slow):",
+    "```",
+    transcriptSearch,
+    "```",
+    "Use narrow search terms (error messages, file paths, function names) rather than broad keywords.",
+    "",
+  ]
+}
+
 export type BuildMemorySystemPromptOptions = {
   includeIndex?: boolean
 }
@@ -130,6 +153,7 @@ export function buildMemorySystemPrompt(
   options: BuildMemorySystemPromptOptions = {},
 ): string {
   const memoryDir = getMemoryDir(worktree)
+  const projectDir = getProjectDir(worktree)
   const indexContent = readIndex(worktree)
   const includeIndex = options.includeIndex ?? true
 
@@ -174,6 +198,7 @@ export function buildMemorySystemPrompt(
     "- When to use or update a plan instead of memory: If you are about to start a non-trivial implementation task and would like to reach alignment with the user on your approach you should use a Plan rather than saving this information to memory. Similarly, if you already have a plan within the conversation and you have changed your approach persist that change by updating the plan rather than saving a memory.",
     "- When to use or update tasks instead of memory: When you need to break your work in current conversation into discrete steps or keep track of your progress use tasks instead of saving to memory. Tasks are great for persisting information about the work that needs to be done in the current conversation, but memory should be reserved for information that will be useful in future conversations.",
     "",
+    ...buildSearchingPastContextSection(memoryDir, projectDir),
   ]
 
   if (includeIndex) {

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { buildMemorySystemPrompt } from "../src/prompt.js"
-import { getMemoryDir, getMemoryEntrypoint, ENTRYPOINT_NAME } from "../src/paths.js"
+import { getMemoryDir, getMemoryEntrypoint, getProjectDir, ENTRYPOINT_NAME } from "../src/paths.js"
 
 const tempDirs: string[] = []
 
@@ -154,5 +154,20 @@ describe("buildMemorySystemPrompt", () => {
     expect(prompt).toContain("# Auto Memory")
     expect(prompt).not.toContain("## MEMORY.md")
     expect(prompt).not.toContain("Hidden Memory")
+  })
+
+  test("includes Searching past context section with grep commands", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+    const projectDir = getProjectDir(repo)
+    const prompt = buildMemorySystemPrompt(repo)
+
+    expect(prompt).toContain("## Searching past context")
+    expect(prompt).toContain(memDir)
+    expect(prompt).toContain(projectDir)
+    expect(prompt).toContain('grep -rn')
+    expect(prompt).toContain('--include="*.md"')
+    expect(prompt).toContain('--include="*.jsonl"')
+    expect(prompt).toContain("narrow search terms")
   })
 })

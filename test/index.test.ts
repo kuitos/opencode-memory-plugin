@@ -184,3 +184,86 @@ describe("MemoryPlugin system transform", () => {
     }
   })
 })
+
+describe("MemoryPlugin tool.execute.after hook", () => {
+  test("exposes tool.execute.after hook", async () => {
+    const repo = makeTempGitRepo()
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    expect(plugin["tool.execute.after"]).toBeDefined()
+    expect(typeof plugin["tool.execute.after"]).toBe("function")
+  })
+
+  test("tracks recent tools per session", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "grep_ref", "Grep Tool API", "Usage reference for grep tool", "reference", "How to use grep tool")
+    saveMemory(repo, "project_info", "Project Info", "General project info", "project", "Project setup details")
+
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const afterHook = plugin["tool.execute.after"] as unknown as (
+      input: { tool: string; sessionID: string; callID: string; args: unknown },
+      output: { title: string; output: string; metadata: unknown },
+    ) => Promise<void>
+
+    await afterHook(
+      { tool: "grep", sessionID: "ses_tools_test", callID: "call_1", args: {} },
+      { title: "", output: "", metadata: {} },
+    )
+
+    const transform = plugin["experimental.chat.system.transform"] as unknown as (
+      input: { model: unknown; sessionID: string },
+      output: { system: string[] },
+    ) => Promise<void>
+    const output = { system: [] as string[] }
+
+    await transform({ model: "test-model", sessionID: "ses_tools_test" }, output)
+
+    expect(output.system[0]).toContain("Project Info")
+  })
+})
+
+describe("MemoryPlugin alreadySurfaced tracking", () => {
+  test("does not re-surface same memories across turns in same session", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "only_mem", "Only Memory", "The sole memory", "user", "Single memory content")
+
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as (
+      input: {},
+      output: {
+        messages: Array<{
+          info: { role: string; sessionID: string }
+          parts: Array<{ type: string; text?: string }>
+        }>
+      },
+    ) => Promise<void>
+
+    const transform = plugin["experimental.chat.system.transform"] as unknown as (
+      input: { model: unknown; sessionID: string },
+      output: { system: string[] },
+    ) => Promise<void>
+
+    await messagesTransform({}, {
+      messages: [{
+        info: { role: "user", sessionID: "ses_surfaced" },
+        parts: [{ type: "text", text: "Tell me about the only memory" }],
+      }],
+    })
+
+    const output1 = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_surfaced" }, output1)
+    expect(output1.system[0]).toContain("## Recalled Memories")
+    expect(output1.system[0]).toContain("Only Memory")
+
+    await messagesTransform({}, {
+      messages: [{
+        info: { role: "user", sessionID: "ses_surfaced" },
+        parts: [{ type: "text", text: "Tell me about the only memory again" }],
+      }],
+    })
+
+    const output2 = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_surfaced" }, output2)
+    expect(output2.system[0]).not.toContain("## Recalled Memories")
+  })
+})

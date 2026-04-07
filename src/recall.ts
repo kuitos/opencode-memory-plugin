@@ -4,6 +4,7 @@ import { getMemoryDir } from "./paths.js"
 
 export type RecalledMemory = {
   fileName: string
+  filePath: string
   name: string
   type: string
   description: string
@@ -43,10 +44,18 @@ function readMemoryContent(filePath: string): string {
 
 function scoreHeader(header: MemoryHeader, content: string, terms: string[]): number {
   if (terms.length === 0) return 0
-  const haystack = `${header.name ?? ""}\n${header.filename}\n${header.description ?? ""}\n${content}`.toLowerCase()
+
+  const nameHaystack = (header.name ?? "").toLowerCase()
+  const descHaystack = (header.description ?? "").toLowerCase()
+  const filenameHaystack = header.filename.toLowerCase()
+  const contentHaystack = content.toLowerCase()
+
   let score = 0
   for (const term of terms) {
-    if (haystack.includes(term)) score += 1
+    if (nameHaystack.includes(term)) score += 3
+    if (descHaystack.includes(term)) score += 3
+    if (filenameHaystack.includes(term)) score += 1
+    if (contentHaystack.includes(term)) score += 1
   }
   return score
 }
@@ -75,10 +84,24 @@ function truncateMemoryContent(content: string): string {
 
 // Port of Claude Code's findRelevantMemories pattern, adapted for
 // keyword-based selection (no LLM side query available in plugin context).
+function isToolReferenceMemory(header: MemoryHeader, content: string, recentTools: readonly string[]): boolean {
+  if (recentTools.length === 0) return false
+  const type = header.type
+  if (type !== "reference") return false
+
+  const haystack = `${header.name ?? ""}\n${header.description ?? ""}\n${content}`.toLowerCase()
+  const warningSignals = ["warning", "gotcha", "issue", "bug", "caveat", "pitfall", "known issue"]
+  if (warningSignals.some((w) => haystack.includes(w))) return false
+
+  const toolHaystack = recentTools.map((t) => t.toLowerCase())
+  return toolHaystack.some((tool) => haystack.includes(tool))
+}
+
 export function recallRelevantMemories(
   worktree: string,
   query?: string,
   alreadySurfaced: ReadonlySet<string> = new Set(),
+  recentTools: readonly string[] = [],
 ): RecalledMemory[] {
   const memoryDir = getMemoryDir(worktree)
   const headers = scanMemoryFiles(memoryDir).filter(
@@ -96,7 +119,7 @@ export function recallRelevantMemories(
       content,
       score: scoreHeader(header, content, terms),
     }
-  })
+  }).filter(({ header, content }) => !isToolReferenceMemory(header, content, recentTools))
 
   if (terms.length > 0 && scored.some((s) => s.score > 0)) {
     scored.sort((a, b) => b.score - a.score || b.header.mtimeMs - a.header.mtimeMs)
@@ -108,6 +131,7 @@ export function recallRelevantMemories(
     const nameFromFilename = header.filename.replace(/\.md$/, "").replace(/.*\//, "")
     return {
       fileName: header.filename,
+      filePath: header.filePath,
       name: header.name ?? nameFromFilename,
       type: header.type ?? "user",
       description: header.description ?? "",

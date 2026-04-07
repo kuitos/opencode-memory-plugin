@@ -13,6 +13,10 @@ import {
 import { getMemoryDir } from "./paths.js"
 
 const latestUserQueryBySession = new Map<string, string>()
+const surfacedMemoriesBySession = new Map<string, Set<string>>()
+const recentToolsBySession = new Map<string, string[]>()
+
+const MAX_RECENT_TOOLS = 20
 
 function shouldIgnoreMemoryContext(query: string | undefined): boolean {
   if (process.env.OPENCODE_MEMORY_IGNORE === "1") return true
@@ -92,6 +96,21 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
       cacheLatestUserQuery(input.sessionID, { parts: output.parts })
     },
 
+    "tool.execute.after": async (input) => {
+      const { tool: toolName, sessionID } = input
+      if (!sessionID || !toolName) return
+      if (!recentToolsBySession.has(sessionID)) {
+        recentToolsBySession.set(sessionID, [])
+      }
+      const tools = recentToolsBySession.get(sessionID)!
+      if (!tools.includes(toolName)) {
+        tools.push(toolName)
+        if (tools.length > MAX_RECENT_TOOLS) {
+          tools.shift()
+        }
+      }
+    },
+
     "experimental.chat.messages.transform": async (_input, output) => {
       const { query, sessionID } = getLastUserQuery(output.messages)
       if (query && sessionID) latestUserQueryBySession.set(sessionID, query)
@@ -133,7 +152,20 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
       }
 
       const ignoreMemoryContext = process.env.OPENCODE_MEMORY_IGNORE === "1" || shouldIgnoreMemoryContext(query)
-      const recalled = ignoreMemoryContext ? [] : recallRelevantMemories(worktree, query)
+      const alreadySurfaced = sessionID ? (surfacedMemoriesBySession.get(sessionID) ?? new Set()) : new Set<string>()
+      const recentTools = sessionID ? (recentToolsBySession.get(sessionID) ?? []) : []
+      const recalled = ignoreMemoryContext ? [] : recallRelevantMemories(worktree, query, alreadySurfaced, recentTools)
+
+      if (sessionID && recalled.length > 0) {
+        if (!surfacedMemoriesBySession.has(sessionID)) {
+          surfacedMemoriesBySession.set(sessionID, new Set())
+        }
+        const surfaced = surfacedMemoriesBySession.get(sessionID)!
+        for (const mem of recalled) {
+          surfaced.add(mem.filePath)
+        }
+      }
+
       const recalledSection = formatRecalledMemories(recalled)
       const memoryPrompt = buildMemorySystemPrompt(worktree, recalledSection, {
         includeIndex: !ignoreMemoryContext,

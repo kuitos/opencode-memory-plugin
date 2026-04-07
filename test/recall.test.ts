@@ -220,6 +220,101 @@ describe("recallRelevantMemories", () => {
     expect(result).toHaveLength(1)
     expect(result[0]!.type).toBe("user")
   })
+
+  test("includes filePath in recalled memory", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "with_path.md",
+      { name: "Path Test", description: "Has file path", type: "user" },
+      "Test content",
+    )
+
+    const result = recallRelevantMemories(repo)
+    expect(result).toHaveLength(1)
+    expect(result[0]!.filePath).toContain("with_path.md")
+    expect(result[0]!.filePath).toContain(memDir)
+  })
+
+  test("weights name and description matches higher than content", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "desc_match.md",
+      { name: "Auth Config", description: "Authentication setup details", type: "project" },
+      "Unrelated body text about nothing",
+      new Date("2024-01-01"),
+    )
+    writeMemoryFile(
+      memDir,
+      "body_match.md",
+      { name: "Other Note", description: "Random unrelated description", type: "user" },
+      "The authentication setup is here",
+      new Date("2025-06-01"),
+    )
+
+    const result = recallRelevantMemories(repo, "authentication")
+    expect(result).toHaveLength(2)
+    expect(result[0]!.fileName).toBe("desc_match.md")
+  })
+
+  test("filters out reference memories for recently used tools", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "grep_ref.md",
+      { name: "Grep Tool API", description: "Usage reference for grep tool", type: "reference" },
+      "How to use the grep tool with various options",
+    )
+    writeMemoryFile(
+      memDir,
+      "other.md",
+      { name: "Project Setup", description: "Project configuration", type: "project" },
+      "General project info",
+    )
+
+    const result = recallRelevantMemories(repo, undefined, new Set(), ["grep"])
+    expect(result).toHaveLength(1)
+    expect(result[0]!.fileName).toBe("other.md")
+  })
+
+  test("keeps warning/gotcha reference memories even for recently used tools", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "grep_warning.md",
+      { name: "Grep Known Issues", description: "Warning about grep tool edge cases", type: "reference" },
+      "Known issue: grep fails on binary files",
+    )
+
+    const result = recallRelevantMemories(repo, undefined, new Set(), ["grep"])
+    expect(result).toHaveLength(1)
+    expect(result[0]!.fileName).toBe("grep_warning.md")
+  })
+
+  test("does not filter non-reference memories for recently used tools", () => {
+    const repo = makeTempGitRepo()
+    const memDir = getMemoryDir(repo)
+
+    writeMemoryFile(
+      memDir,
+      "grep_feedback.md",
+      { name: "Grep Preferences", description: "User prefers grep over find", type: "feedback" },
+      "Always use grep for searching",
+    )
+
+    const result = recallRelevantMemories(repo, undefined, new Set(), ["grep"])
+    expect(result).toHaveLength(1)
+    expect(result[0]!.fileName).toBe("grep_feedback.md")
+  })
 })
 
 describe("formatRecalledMemories", () => {
@@ -231,6 +326,7 @@ describe("formatRecalledMemories", () => {
     const memories: RecalledMemory[] = [
       {
         fileName: "test.md",
+        filePath: "/tmp/memory/test.md",
         name: "Test Memory",
         type: "user",
         description: "A test",
@@ -250,6 +346,7 @@ describe("formatRecalledMemories", () => {
     const memories: RecalledMemory[] = [
       {
         fileName: "old.md",
+        filePath: "/tmp/memory/old.md",
         name: "Old Memory",
         type: "project",
         description: "Old",
@@ -267,6 +364,7 @@ describe("formatRecalledMemories", () => {
     const memories: RecalledMemory[] = [
       {
         fileName: "fresh.md",
+        filePath: "/tmp/memory/fresh.md",
         name: "Fresh",
         type: "user",
         description: "Just created",
@@ -283,6 +381,7 @@ describe("formatRecalledMemories", () => {
     const memories: RecalledMemory[] = [
       {
         fileName: "a.md",
+        filePath: "/tmp/memory/a.md",
         name: "Memory A",
         type: "user",
         description: "First",
@@ -291,6 +390,7 @@ describe("formatRecalledMemories", () => {
       },
       {
         fileName: "b.md",
+        filePath: "/tmp/memory/b.md",
         name: "Memory B",
         type: "feedback",
         description: "Second",
