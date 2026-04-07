@@ -120,9 +120,18 @@ const TRUSTING_RECALL = [
   "A memory that summarizes repo state (activity logs, architecture snapshots) is frozen in time. If the user asks about *recent* or *current* state, prefer `git log` or reading the code over recalling the snapshot.",
 ].join("\n")
 
-export function buildMemorySystemPrompt(worktree: string, recalledMemoriesSection?: string): string {
+export type BuildMemorySystemPromptOptions = {
+  includeIndex?: boolean
+}
+
+export function buildMemorySystemPrompt(
+  worktree: string,
+  recalledMemoriesSection?: string,
+  options: BuildMemorySystemPromptOptions = {},
+): string {
   const memoryDir = getMemoryDir(worktree)
   const indexContent = readIndex(worktree)
+  const includeIndex = options.includeIndex ?? true
 
   const howToSave = [
     "## How to save memories",
@@ -167,15 +176,17 @@ export function buildMemorySystemPrompt(worktree: string, recalledMemoriesSectio
     "",
   ]
 
-  if (indexContent.trim()) {
-    const { content: truncated } = truncateEntrypoint(indexContent)
-    lines.push(`## ${ENTRYPOINT_NAME}`, "", truncated)
-  } else {
-    lines.push(
-      `## ${ENTRYPOINT_NAME}`,
-      "",
-      `Your ${ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here.`,
-    )
+  if (includeIndex) {
+    if (indexContent.trim()) {
+      const { content: truncated } = truncateEntrypoint(indexContent)
+      lines.push(`## ${ENTRYPOINT_NAME}`, "", truncated)
+    } else {
+      lines.push(
+        `## ${ENTRYPOINT_NAME}`,
+        "",
+        `Your ${ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here.`,
+      )
+    }
   }
 
   if (recalledMemoriesSection?.trim()) {

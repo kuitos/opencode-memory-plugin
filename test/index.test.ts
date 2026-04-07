@@ -1,0 +1,186 @@
+import { afterEach, describe, expect, test } from "bun:test"
+import { mkdtempSync, mkdirSync, rmSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
+import { MemoryPlugin } from "../src/index.js"
+import { saveMemory } from "../src/memory.js"
+
+const tempDirs: string[] = []
+
+function makeTempGitRepo(): string {
+  const root = mkdtempSync(join(tmpdir(), "index-test-"))
+  mkdirSync(join(root, ".git"), { recursive: true })
+  tempDirs.push(root)
+  return root
+}
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop()
+    if (dir) rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+describe("MemoryPlugin system transform", () => {
+  test("suppresses memory context when user explicitly asks to ignore memory", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "hidden", "Hidden Memory", "Should be ignored", "user", "Secret context")
+
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const transform = plugin["experimental.chat.system.transform"] as unknown as (
+      input: { model: unknown; messages: Array<{ role: string; content: string }> },
+      output: { system: string[] },
+    ) => Promise<void>
+    const output = { system: [] as string[] }
+
+    await transform(
+      {
+        model: "test-model",
+        messages: [
+          { role: "user", content: "Ignore memory and answer from fresh context only." },
+        ],
+      },
+      output,
+    )
+
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toContain("# Auto Memory")
+    expect(output.system[0]).not.toContain("## MEMORY.md")
+    expect(output.system[0]).not.toContain("Hidden Memory")
+    expect(output.system[0]).not.toContain("## Recalled Memories")
+  })
+
+  test("keeps memory context for normal turns", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "visible", "Visible Memory", "Should be injected", "user", "Visible context")
+
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const transform = plugin["experimental.chat.system.transform"] as unknown as (
+      input: { model: unknown; messages: Array<{ role: string; content: string }> },
+      output: { system: string[] },
+    ) => Promise<void>
+    const output = { system: [] as string[] }
+
+    await transform(
+      {
+        model: "test-model",
+        messages: [
+          { role: "user", content: "What do you remember about visible context?" },
+        ],
+      },
+      output,
+    )
+
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toContain("## MEMORY.md")
+    expect(output.system[0]).toContain("Visible Memory")
+  })
+
+  test("suppresses memory context when real runtime message text lives in parts", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "parts_hidden", "Parts Hidden", "Should be ignored", "user", "Parts context")
+
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as (
+      input: {},
+      output: {
+        messages: Array<{
+          info: { role: string; sessionID: string }
+          parts: Array<{ type: string; text?: string }>
+        }>
+      },
+    ) => Promise<void>
+    const transform = plugin["experimental.chat.system.transform"] as unknown as (
+      input: {
+        model: unknown
+        sessionID: string
+      },
+      output: { system: string[] },
+    ) => Promise<void>
+    const output = { system: [] as string[] }
+
+    await messagesTransform(
+      {},
+      {
+        messages: [
+          {
+            info: { role: "user", sessionID: "ses_test_ignore" },
+            parts: [{ type: "text", text: "Ignore memory and answer from fresh context only." }],
+          },
+        ],
+      },
+    )
+
+    await transform(
+      {
+        model: "test-model",
+        sessionID: "ses_test_ignore",
+      },
+      output,
+    )
+
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).not.toContain("## MEMORY.md")
+    expect(output.system[0]).not.toContain("Parts Hidden")
+    expect(output.system[0]).not.toContain("## Recalled Memories")
+  })
+
+  test("removes Auto Memory system message in messages transform for ignore-memory turns", async () => {
+    const repo = makeTempGitRepo()
+    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as (
+      input: {},
+      output: {
+        messages: Array<{
+          info: { role: string; sessionID?: string }
+          parts: Array<{ type: string; text?: string }>
+        }>
+      },
+    ) => Promise<void>
+
+    const output = {
+      messages: [
+        {
+          info: { role: "system" },
+          parts: [{ type: "text", text: "# Auto Memory\n\n## MEMORY.md\n\n- [Secret](secret.md) — hidden" }],
+        },
+        {
+          info: { role: "user", sessionID: "ses_ignore_messages" },
+          parts: [{ type: "text", text: "Ignore memory and answer from fresh context only." }],
+        },
+      ],
+    }
+
+    await messagesTransform({}, output)
+
+    expect(output.messages).toHaveLength(1)
+    expect(output.messages[0]!.info.role).toBe("user")
+  })
+
+  test("suppresses memory context when env override is set", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "env_hidden", "Env Hidden", "Should be ignored by env", "user", "Env context")
+
+    const original = process.env.OPENCODE_MEMORY_IGNORE
+    process.env.OPENCODE_MEMORY_IGNORE = "1"
+
+    try {
+      const plugin = await MemoryPlugin({ worktree: repo } as never)
+      const transform = plugin["experimental.chat.system.transform"] as unknown as (
+        input: { model: unknown; sessionID: string },
+        output: { system: string[] },
+      ) => Promise<void>
+      const output = { system: [] as string[] }
+
+      await transform({ model: "test-model", sessionID: "ses_env_ignore" }, output)
+
+      expect(output.system).toHaveLength(1)
+      expect(output.system[0]).not.toContain("## MEMORY.md")
+      expect(output.system[0]).not.toContain("Env Hidden")
+      expect(output.system[0]).not.toContain("## Recalled Memories")
+    } finally {
+      if (original === undefined) delete process.env.OPENCODE_MEMORY_IGNORE
+      else process.env.OPENCODE_MEMORY_IGNORE = original
+    }
+  })
+})

@@ -143,4 +143,16 @@ describe("buildMemorySystemPrompt", () => {
     const prompt = buildMemorySystemPrompt(repo, "")
     expect(prompt).not.toContain("## Recalled Memories")
   })
+
+  test("can suppress MEMORY.md context for ignore-memory turns", () => {
+    const repo = makeTempGitRepo()
+    const entrypoint = getMemoryEntrypoint(repo)
+    writeFileSync(entrypoint, "- [Hidden Memory](hidden.md) — Should not be injected\n", "utf-8")
+
+    const prompt = buildMemorySystemPrompt(repo, undefined, { includeIndex: false })
+
+    expect(prompt).toContain("# Auto Memory")
+    expect(prompt).not.toContain("## MEMORY.md")
+    expect(prompt).not.toContain("Hidden Memory")
+  })
 })

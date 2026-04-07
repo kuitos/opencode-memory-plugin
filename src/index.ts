@@ -12,31 +12,132 @@ import {
 } from "./memory.js"
 import { getMemoryDir } from "./paths.js"
 
+const latestUserQueryBySession = new Map<string, string>()
+
+function shouldIgnoreMemoryContext(query: string | undefined): boolean {
+  if (process.env.OPENCODE_MEMORY_IGNORE === "1") return true
+  if (!query) return false
+
+  const normalized = query.toLowerCase()
+  return (
+    /(ignore|don't use|do not use|without|skip)\s+(the\s+)?memory/.test(normalized) ||
+    /memory\s+(should be|must be)?\s*ignored/.test(normalized)
+  )
+}
+
+function extractUserQuery(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined
+
+  if ("content" in message) {
+    const content = (message as { content?: unknown }).content
+    if (typeof content === "string") return content
+    if (content !== undefined) return JSON.stringify(content)
+  }
+
+  if ("parts" in message) {
+    const parts = (message as { parts?: unknown }).parts
+    if (Array.isArray(parts)) {
+      const text = parts
+        .map((part) => {
+          if (!part || typeof part !== "object") return ""
+          return typeof (part as { text?: unknown }).text === "string"
+            ? (part as { text: string }).text
+            : ""
+        })
+        .filter(Boolean)
+        .join("\n")
+        .trim()
+      if (text) return text
+    }
+  }
+
+  return undefined
+}
+
+function getLastUserQuery(messages: Array<{ info?: { role?: unknown; sessionID?: unknown }; parts?: unknown }>): {
+  query?: string
+  sessionID?: string
+} {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.info?.role !== "user") continue
+
+    const query = extractUserQuery(message)
+    const sessionID = typeof message.info?.sessionID === "string" ? message.info.sessionID : undefined
+    return { query, sessionID }
+  }
+
+  return {}
+}
+
+function cacheLatestUserQuery(sessionID: string | undefined, message: unknown): void {
+  if (!sessionID) return
+  const query = extractUserQuery(message)
+  if (query) {
+    latestUserQueryBySession.set(sessionID, query)
+  }
+}
+
+function isAutoMemoryPart(part: unknown): boolean {
+  if (!part || typeof part !== "object") return false
+  return typeof (part as { text?: unknown }).text === "string" &&
+    (part as { text: string }).text.includes("# Auto Memory")
+}
+
 export const MemoryPlugin: Plugin = async ({ worktree }) => {
   getMemoryDir(worktree)
 
   return {
+    "chat.message": async (input, output) => {
+      cacheLatestUserQuery(input.sessionID, { parts: output.parts })
+    },
+
+    "experimental.chat.messages.transform": async (_input, output) => {
+      const { query, sessionID } = getLastUserQuery(output.messages)
+      if (query && sessionID) latestUserQueryBySession.set(sessionID, query)
+
+      if (shouldIgnoreMemoryContext(query)) {
+        output.messages = output.messages
+          .map((message) => {
+            const role = String(message.info.role)
+            if (role !== "system") return message
+
+            const parts = message.parts.filter((part) => !isAutoMemoryPart(part))
+            return { ...message, parts }
+          })
+          .filter((message) => message.parts.length > 0)
+      }
+    },
+
     "experimental.chat.system.transform": async (_input, output) => {
       let query: string | undefined
+      let sessionID: string | undefined
       if (_input && typeof _input === "object") {
+        sessionID = (typeof (_input as { sessionID?: unknown }).sessionID === "string"
+          ? (_input as { sessionID?: string }).sessionID
+          : undefined)
+        if (sessionID) {
+          query = latestUserQueryBySession.get(sessionID)
+        }
+
         const messages = (_input as { messages?: unknown }).messages
-        if (Array.isArray(messages)) {
+        if (!query && Array.isArray(messages)) {
           const lastUserMsg = [...messages]
             .reverse()
             .find((message) =>
               message && typeof message === "object" && "role" in message && (message as { role?: unknown }).role === "user",
             )
 
-          if (lastUserMsg && typeof lastUserMsg === "object" && "content" in lastUserMsg) {
-            const content = (lastUserMsg as { content?: unknown }).content
-            query = typeof content === "string" ? content : JSON.stringify(content)
-          }
+          query = extractUserQuery(lastUserMsg)
         }
       }
 
-      const recalled = recallRelevantMemories(worktree, query)
+      const ignoreMemoryContext = process.env.OPENCODE_MEMORY_IGNORE === "1" || shouldIgnoreMemoryContext(query)
+      const recalled = ignoreMemoryContext ? [] : recallRelevantMemories(worktree, query)
       const recalledSection = formatRecalledMemories(recalled)
-      const memoryPrompt = buildMemorySystemPrompt(worktree, recalledSection)
+      const memoryPrompt = buildMemorySystemPrompt(worktree, recalledSection, {
+        includeIndex: !ignoreMemoryContext,
+      })
       output.system.push(memoryPrompt)
     },
 
