@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-memory",
-  "version": "0.0.0",
+  "version": "1.6.0",
   "type": "module",
   "description": "Claude Code-compatible memory compatibility layer for OpenCode — zero config, local-first, no migration",
   "main": "dist/index.js",
