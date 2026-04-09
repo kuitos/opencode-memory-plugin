@@ -956,104 +956,6 @@ rollback_consolidation_lock() {
   set_file_mtime_secs "$path" "$prior_mtime"
 }
 
-run_extraction_if_needed() {
-  local session_id="$1"
-  local memory_written_during_session="$2"
-
-  if [ "$EXTRACT_ENABLED" = "0" ]; then
-    return 0
-  fi
-
-  if [ "$memory_written_during_session" = "1" ]; then
-    log "Main agent already wrote memories during session, skipping extraction"
-    return 0
-  fi
-
-  if ! acquire_simple_lock "$EXTRACT_LOCK_FILE" "memory extraction"; then
-    return 0
-  fi
-
-  log "Extracting memories from session $session_id..."
-  log "Extraction log: $EXTRACT_LOG_FILE"
-
-  local cmd=("$REAL_OPENCODE" run -s "$session_id" --fork --dir "$WORKING_DIR")
-  if [ -n "$EXTRACT_MODEL" ]; then
-    cmd+=(-m "$EXTRACT_MODEL")
-  fi
-  if [ -n "$EXTRACT_AGENT" ]; then
-    cmd+=(--agent "$EXTRACT_AGENT")
-  fi
-  cmd+=("$EXTRACT_PROMPT")
-
-  if "${cmd[@]}" >> "$EXTRACT_LOG_FILE" 2>&1; then
-    log "Memory extraction completed successfully"
-  else
-    local code=$?
-    log "Memory extraction failed (exit code $code). Check $EXTRACT_LOG_FILE for details"
-  fi
-
-  release_simple_lock "$EXTRACT_LOCK_FILE"
-}
-
-run_autodream_if_needed() {
-  local session_id="$1"
-
-  if [ "$AUTODREAM_ENABLED" = "0" ]; then
-    return 0
-  fi
-
-  if ! command -v jq >/dev/null 2>&1; then
-    log "jq not found, skipping auto-dream (requires JSON session parsing)"
-    return 0
-  fi
-
-  local last_at now hours_since since_ms touched_count
-  last_at=$(read_last_consolidated_at_secs)
-  now=$(date +%s)
-
-  hours_since=$(((now - last_at) / 3600))
-  if [ "$hours_since" -lt "$AUTODREAM_MIN_HOURS" ]; then
-    return 0
-  fi
-
-  since_ms=$((last_at * 1000))
-  touched_count=$(count_sessions_touched_since_ms "$since_ms" "$session_id" || true)
-  if [ -z "$touched_count" ]; then
-    log "Unable to inspect touched sessions, skipping auto-dream"
-    return 0
-  fi
-
-  if [ "$touched_count" -lt "$AUTODREAM_MIN_SESSIONS" ]; then
-    return 0
-  fi
-
-  if ! try_acquire_consolidation_lock; then
-    return 0
-  fi
-
-  log "Auto-dream firing (${hours_since}h since last consolidation, ${touched_count} sessions touched)"
-  log "Auto-dream log: $AUTODREAM_LOG_FILE"
-
-  local cmd=("$REAL_OPENCODE" run -s "$session_id" --fork --dir "$WORKING_DIR")
-  if [ -n "$AUTODREAM_MODEL" ]; then
-    cmd+=(-m "$AUTODREAM_MODEL")
-  fi
-  if [ -n "$AUTODREAM_AGENT" ]; then
-    cmd+=(--agent "$AUTODREAM_AGENT")
-  fi
-  cmd+=("$AUTODREAM_PROMPT")
-
-  if "${cmd[@]}" >> "$AUTODREAM_LOG_FILE" 2>&1; then
-    log "Auto-dream consolidation completed successfully"
-    # Keep lock mtime at "now" to represent last consolidated timestamp.
-  else
-    local code=$?
-    log "Auto-dream consolidation failed (exit code $code). Rolling back gate timestamp"
-    rollback_consolidation_lock "$CONSOLIDATION_PRIOR_MTIME"
-    return 0
-  fi
-}
-
 cleanup_forked_sessions() {
   local before_json="$1"
 
@@ -1110,17 +1012,118 @@ PY
   done <<< "$fork_ids"
 }
 
+run_extraction_if_needed() {
+  local session_id="$1"
+  local memory_written_during_session="$2"
+
+  if [ "$EXTRACT_ENABLED" = "0" ]; then
+    return 0
+  fi
+
+  if [ "$memory_written_during_session" = "1" ]; then
+    log "Main agent already wrote memories during session, skipping extraction"
+    return 0
+  fi
+
+  if ! acquire_simple_lock "$EXTRACT_LOCK_FILE" "memory extraction"; then
+    return 0
+  fi
+
+  log "Extracting memories from session $session_id..."
+  log "Extraction log: $EXTRACT_LOG_FILE"
+
+  local cmd=("$REAL_OPENCODE" run -s "$session_id" --fork --dir "$WORKING_DIR")
+  if [ -n "$EXTRACT_MODEL" ]; then
+    cmd+=(-m "$EXTRACT_MODEL")
+  fi
+  if [ -n "$EXTRACT_AGENT" ]; then
+    cmd+=(--agent "$EXTRACT_AGENT")
+  fi
+  cmd+=("$EXTRACT_PROMPT")
+
+  local pre_fork_json
+  pre_fork_json=$(get_session_list_json 5 2>/dev/null || true)
+
+  if "${cmd[@]}" >> "$EXTRACT_LOG_FILE" 2>&1; then
+    log "Memory extraction completed successfully"
+  else
+    local code=$?
+    log "Memory extraction failed (exit code $code). Check $EXTRACT_LOG_FILE for details"
+  fi
+
+  cleanup_forked_sessions "$pre_fork_json"
+  release_simple_lock "$EXTRACT_LOCK_FILE"
+}
+
+run_autodream_if_needed() {
+  local session_id="$1"
+
+  if [ "$AUTODREAM_ENABLED" = "0" ]; then
+    return 0
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    log "jq not found, skipping auto-dream (requires JSON session parsing)"
+    return 0
+  fi
+
+  local last_at now hours_since since_ms touched_count
+  last_at=$(read_last_consolidated_at_secs)
+  now=$(date +%s)
+
+  hours_since=$(((now - last_at) / 3600))
+  if [ "$hours_since" -lt "$AUTODREAM_MIN_HOURS" ]; then
+    return 0
+  fi
+
+  since_ms=$((last_at * 1000))
+  touched_count=$(count_sessions_touched_since_ms "$since_ms" "$session_id" || true)
+  if [ -z "$touched_count" ]; then
+    log "Unable to inspect touched sessions, skipping auto-dream"
+    return 0
+  fi
+
+  if [ "$touched_count" -lt "$AUTODREAM_MIN_SESSIONS" ]; then
+    return 0
+  fi
+
+  if ! try_acquire_consolidation_lock; then
+    return 0
+  fi
+
+  log "Auto-dream firing (${hours_since}h since last consolidation, ${touched_count} sessions touched)"
+  log "Auto-dream log: $AUTODREAM_LOG_FILE"
+
+  local cmd=("$REAL_OPENCODE" run -s "$session_id" --fork --dir "$WORKING_DIR")
+  if [ -n "$AUTODREAM_MODEL" ]; then
+    cmd+=(-m "$AUTODREAM_MODEL")
+  fi
+  if [ -n "$AUTODREAM_AGENT" ]; then
+    cmd+=(--agent "$AUTODREAM_AGENT")
+  fi
+  cmd+=("$AUTODREAM_PROMPT")
+
+  local pre_fork_json
+  pre_fork_json=$(get_session_list_json 5 2>/dev/null || true)
+
+  if "${cmd[@]}" >> "$AUTODREAM_LOG_FILE" 2>&1; then
+    log "Auto-dream consolidation completed successfully"
+    # Keep lock mtime at "now" to represent last consolidated timestamp.
+  else
+    local code=$?
+    log "Auto-dream consolidation failed (exit code $code). Rolling back gate timestamp"
+    rollback_consolidation_lock "$CONSOLIDATION_PRIOR_MTIME"
+  fi
+
+  cleanup_forked_sessions "$pre_fork_json"
+}
+
 run_post_session_tasks() {
   local session_id="$1"
   local memory_written_during_session="$2"
 
-  local pre_tasks_json
-  pre_tasks_json=$(get_session_list_json 10 2>/dev/null || true)
-
   run_extraction_if_needed "$session_id" "$memory_written_during_session"
   run_autodream_if_needed "$session_id"
-
-  cleanup_forked_sessions "$pre_tasks_json"
 }
 
 # ============================================================================
