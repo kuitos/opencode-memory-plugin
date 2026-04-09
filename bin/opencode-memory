@@ -956,6 +956,80 @@ rollback_consolidation_lock() {
   set_file_mtime_secs "$path" "$prior_mtime"
 }
 
+cleanup_forked_sessions() {
+  local before_json="$1"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local after_json
+  after_json=$(get_session_list_json 10 2>/dev/null || true)
+
+  if [ -z "$before_json" ] || [ -z "$after_json" ]; then
+    return 0
+  fi
+
+  local fork_ids
+  fork_ids=$(python3 - "$before_json" "$after_json" "$WORKING_DIR" "$PROJECT_SCOPE_DIR" <<'PY'
+import json
+import os
+import sys
+
+def parse(raw):
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+before_raw, after_raw, workdir, project_dir = sys.argv[1:5]
+before = parse(before_raw)
+after = parse(after_raw)
+
+before_ids = {item.get("id") for item in before if item.get("id")}
+workdir = os.path.realpath(workdir)
+project_dir = os.path.realpath(project_dir)
+
+for item in after:
+    sid = item.get("id", "")
+    if not sid or sid in before_ids:
+        continue
+    directory = item.get("directory", "")
+    if not directory:
+        continue
+    d = os.path.realpath(directory)
+    if d in (workdir, project_dir):
+        print(sid)
+PY
+  ) || return 0
+
+  while IFS= read -r fork_id; do
+    [ -n "$fork_id" ] || continue
+    if "$REAL_OPENCODE" session delete "$fork_id" >/dev/null 2>&1; then
+      log "Cleaned up forked session $fork_id"
+    fi
+  done <<< "$fork_ids"
+}
+
+session_has_conversation() {
+  local session_id="$1"
+  local transcript_file
+  transcript_file="$(get_transcripts_dir)/${session_id}.jsonl"
+
+  if [ -f "$transcript_file" ]; then
+    local line_count
+    line_count=$(wc -l < "$transcript_file")
+    # Empty sessions have at most 1 line (the initial user entry with no content).
+    # Real sessions have 3+ lines (user + tool_use + tool_result at minimum).
+    [ "$line_count" -gt 1 ]
+    return $?
+  fi
+
+  # Transcript not found — assume content exists to avoid skipping a valid session.
+  return 0
+}
+
 run_extraction_if_needed() {
   local session_id="$1"
   local memory_written_during_session="$2"
@@ -985,6 +1059,9 @@ run_extraction_if_needed() {
   fi
   cmd+=("$EXTRACT_PROMPT")
 
+  local pre_fork_json
+  pre_fork_json=$(get_session_list_json 5 2>/dev/null || true)
+
   if "${cmd[@]}" >> "$EXTRACT_LOG_FILE" 2>&1; then
     log "Memory extraction completed successfully"
   else
@@ -992,6 +1069,7 @@ run_extraction_if_needed() {
     log "Memory extraction failed (exit code $code). Check $EXTRACT_LOG_FILE for details"
   fi
 
+  cleanup_forked_sessions "$pre_fork_json"
   release_simple_lock "$EXTRACT_LOCK_FILE"
 }
 
@@ -1043,6 +1121,9 @@ run_autodream_if_needed() {
   fi
   cmd+=("$AUTODREAM_PROMPT")
 
+  local pre_fork_json
+  pre_fork_json=$(get_session_list_json 5 2>/dev/null || true)
+
   if "${cmd[@]}" >> "$AUTODREAM_LOG_FILE" 2>&1; then
     log "Auto-dream consolidation completed successfully"
     # Keep lock mtime at "now" to represent last consolidated timestamp.
@@ -1050,8 +1131,9 @@ run_autodream_if_needed() {
     local code=$?
     log "Auto-dream consolidation failed (exit code $code). Rolling back gate timestamp"
     rollback_consolidation_lock "$CONSOLIDATION_PRIOR_MTIME"
-    return 0
   fi
+
+  cleanup_forked_sessions "$pre_fork_json"
 }
 
 run_post_session_tasks() {
@@ -1089,6 +1171,13 @@ fi
 session_id=$(wait_for_session_target_id "$PRE_SESSION_JSON" "$SESSION_CAPTURE_STARTED_AT_MS" "$SESSION_WAIT_SECONDS" || true)
 if [ -z "$session_id" ]; then
   log "No session found, skipping post-session memory maintenance"
+  cleanup_timestamp
+  exit $opencode_exit
+fi
+
+# Step 3.5: Skip if session had no real conversation (e.g. user opened TUI and exited)
+if ! session_has_conversation "$session_id"; then
+  log "Session $session_id has no conversation, skipping post-session memory maintenance"
   cleanup_timestamp
   exit $opencode_exit
 fi
