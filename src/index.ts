@@ -123,10 +123,67 @@ function extractRecentTools(
   return tools
 }
 
+// Tracks how many memory entries a memory_list call saw so tool.execute.after
+// can render a meaningful title without re-reading the filesystem. Keyed by
+// callID, which uniquely identifies a single tool invocation.
+const memoryListCountByCallID = new Map<string, number>()
+const memorySearchCountByCallID = new Map<string, number>()
+
+function buildMemoryToolTitle(
+  toolID: string,
+  args: Record<string, unknown> | undefined,
+  callID: string | undefined,
+): string | undefined {
+  switch (toolID) {
+    case "memory_save": {
+      const type = typeof args?.type === "string" ? args.type : ""
+      const name = typeof args?.name === "string" ? args.name : ""
+      if (type && name) return `${type}: ${name}`
+      if (name) return name
+      return undefined
+    }
+    case "memory_delete":
+    case "memory_read": {
+      const fileName = typeof args?.file_name === "string" ? args.file_name : ""
+      return fileName || undefined
+    }
+    case "memory_list": {
+      const count = callID ? memoryListCountByCallID.get(callID) : undefined
+      if (callID) memoryListCountByCallID.delete(callID)
+      if (count === undefined) return "list memories"
+      return `${count} ${count === 1 ? "memory" : "memories"}`
+    }
+    case "memory_search": {
+      const query = typeof args?.query === "string" ? args.query : ""
+      const count = callID ? memorySearchCountByCallID.get(callID) : undefined
+      if (callID) memorySearchCountByCallID.delete(callID)
+      if (query && count !== undefined) {
+        return `"${query}" · ${count} ${count === 1 ? "match" : "matches"}`
+      }
+      if (query) return `"${query}"`
+      return undefined
+    }
+    default:
+      return undefined
+  }
+}
+
+function getCallID(ctx: unknown): string | undefined {
+  if (!ctx || typeof ctx !== "object") return undefined
+  const v = (ctx as { callID?: unknown }).callID
+  return typeof v === "string" ? v : undefined
+}
+
 export const MemoryPlugin: Plugin = async ({ worktree }) => {
   getMemoryDir(worktree)
 
   return {
+    "tool.execute.after": async (input, output) => {
+      if (!input.tool.startsWith("memory_")) return
+      const title = buildMemoryToolTitle(input.tool, input.args, input.callID)
+      if (title) output.title = title
+    },
+
     "experimental.chat.messages.transform": async (_input, output) => {
       const { query, sessionID } = getLastUserQuery(output.messages)
 
@@ -219,7 +276,7 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
               "Memory content. For feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines",
             ),
         },
-        async execute(args) {
+        async execute(args, _ctx) {
           const filePath = saveMemory(worktree, args.file_name, args.name, args.description, args.type, args.content)
           return `Memory saved to ${filePath}`
         },
@@ -230,7 +287,7 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
         args: {
           file_name: tool.schema.string().describe("File name of the memory to delete (with or without .md extension)"),
         },
-        async execute(args) {
+        async execute(args, _ctx) {
           const deleted = deleteMemory(worktree, args.file_name)
           return deleted ? `Memory "${args.file_name}" deleted.` : `Memory "${args.file_name}" not found.`
         },
@@ -242,8 +299,10 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
           "Use this to check what memories exist before saving a new one (to avoid duplicates) " +
           "or when you need to recall what's been stored.",
         args: {},
-        async execute() {
+        async execute(_args, ctx) {
           const entries = listMemories(worktree)
+          const callID = getCallID(ctx)
+          if (callID) memoryListCountByCallID.set(callID, entries.length)
           if (entries.length === 0) {
             return "No memories saved yet."
           }
@@ -261,8 +320,10 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
         args: {
           query: tool.schema.string().describe("Search query — searches across name, description, and content"),
         },
-        async execute(args) {
+        async execute(args, ctx) {
           const results = searchMemories(worktree, args.query)
+          const callID = getCallID(ctx)
+          if (callID) memorySearchCountByCallID.set(callID, results.length)
           if (results.length === 0) {
             return `No memories matching "${args.query}".`
           }
@@ -278,7 +339,7 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
         args: {
           file_name: tool.schema.string().describe("File name of the memory to read (with or without .md extension)"),
         },
-        async execute(args) {
+        async execute(args, _ctx) {
           const entry = readMemory(worktree, args.file_name)
           if (!entry) {
             return `Memory "${args.file_name}" not found.`
