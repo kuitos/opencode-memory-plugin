@@ -17,9 +17,79 @@ const MAX_MEMORY_LINES = 200
 const MAX_MEMORY_BYTES = 4096
 
 const encoder = new TextEncoder()
+const QUERY_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "this",
+  "that",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "how",
+  "should",
+  "would",
+  "could",
+  "please",
+  "about",
+  "again",
+  "into",
+  "from",
+  "have",
+  "know",
+  "need",
+  "only",
+  "over",
+  "tell",
+  "than",
+  "then",
+  "them",
+  "they",
+  "will",
+  "your",
+  "you",
+  "are",
+  "can",
+  "did",
+  "has",
+  "her",
+  "him",
+  "his",
+  "its",
+  "not",
+  "our",
+  "out",
+  "she",
+  "was",
+  "were",
+  "all",
+  "any",
+  "but",
+  "get",
+  "had",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "to",
+])
 
 function tokenizeQuery(query: string): string[] {
-  return [...new Set(query.toLowerCase().split(/\s+/).map((token) => token.trim()).filter((token) => token.length >= 2))]
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9_]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2 && !QUERY_STOP_WORDS.has(token)),
+    ),
+  ]
 }
 
 function readMemoryContent(filePath: string): string {
@@ -82,8 +152,51 @@ function truncateMemoryContent(content: string): string {
   return kept.join("\n")
 }
 
-// Port of Claude Code's findRelevantMemories pattern, adapted for
-// keyword-based selection (no LLM side query available in plugin context).
+function memorySurfaceKey(header: MemoryHeader): string {
+  return `${header.name ?? header.filename.replace(/\.md$/, "").replace(/.*\//, "")}|${header.type ?? "user"}`
+}
+
+function recalledMemoryFromHeader(header: MemoryHeader, content: string, now: number): RecalledMemory {
+  const nameFromFilename = header.filename.replace(/\.md$/, "").replace(/.*\//, "")
+  return {
+    fileName: header.filename,
+    filePath: header.filePath,
+    name: header.name ?? nameFromFilename,
+    type: header.type ?? "user",
+    description: header.description ?? "",
+    content: truncateMemoryContent(content),
+    ageInDays: Math.max(0, Math.floor((now - header.mtimeMs) / (1000 * 60 * 60 * 24))),
+  }
+}
+
+export function recallSelectedMemories(
+  headers: readonly MemoryHeader[],
+  selectedFilenames: readonly string[],
+  alreadySurfaced: ReadonlySet<string> = new Set(),
+): RecalledMemory[] {
+  if (selectedFilenames.length === 0) return []
+
+  const now = Date.now()
+  const byFilename = new Map(headers.map((header) => [header.filename, header]))
+  const recalled: RecalledMemory[] = []
+  const seen = new Set<string>()
+
+  for (const filename of selectedFilenames) {
+    if (seen.has(filename)) continue
+    seen.add(filename)
+
+    const header = byFilename.get(filename)
+    if (!header || alreadySurfaced.has(memorySurfaceKey(header))) continue
+
+    recalled.push(recalledMemoryFromHeader(header, readMemoryContent(header.filePath), now))
+    if (recalled.length >= MAX_RECALLED_MEMORIES) break
+  }
+
+  return recalled
+}
+
+// Legacy local selector retained for direct API/tests. The plugin path uses
+// recallSelectedMemories() with the LLM selector in recallSelector.ts.
 function isToolReferenceMemory(header: MemoryHeader, content: string, recentTools: readonly string[]): boolean {
   if (recentTools.length === 0) return false
   const type = header.type
@@ -105,7 +218,7 @@ export function recallRelevantMemories(
 ): RecalledMemory[] {
   const memoryDir = getMemoryDir(worktree)
   const headers = scanMemoryFiles(memoryDir).filter(
-    (h) => !alreadySurfaced.has(`${h.name ?? h.filename.replace(/\.md$/, "").replace(/.*\//, "")}|${h.type ?? "user"}`),
+    (h) => !alreadySurfaced.has(memorySurfaceKey(h)),
   )
   if (headers.length === 0) return []
 
@@ -121,24 +234,16 @@ export function recallRelevantMemories(
     }
   }).filter(({ header, content }) => !isToolReferenceMemory(header, content, recentTools))
 
-  if (terms.length > 0 && scored.some((s) => s.score > 0)) {
+  if (terms.length > 0) {
+    if (!scored.some((s) => s.score > 0)) return []
     scored.sort((a, b) => b.score - a.score || b.header.mtimeMs - a.header.mtimeMs)
   } else {
     scored.sort((a, b) => b.header.mtimeMs - a.header.mtimeMs)
   }
 
-  return scored.slice(0, MAX_RECALLED_MEMORIES).map(({ header, content }) => {
-    const nameFromFilename = header.filename.replace(/\.md$/, "").replace(/.*\//, "")
-    return {
-      fileName: header.filename,
-      filePath: header.filePath,
-      name: header.name ?? nameFromFilename,
-      type: header.type ?? "user",
-      description: header.description ?? "",
-      content: truncateMemoryContent(content),
-      ageInDays: Math.max(0, Math.floor((now - header.mtimeMs) / (1000 * 60 * 60 * 24))),
-    }
-  })
+  return scored
+    .slice(0, MAX_RECALLED_MEMORIES)
+    .map(({ header, content }) => recalledMemoryFromHeader(header, content, now))
 }
 
 function formatAgeWarning(ageInDays: number): string {

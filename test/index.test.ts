@@ -36,6 +36,55 @@ type SystemTransform = (
   output: { system: string[] },
 ) => Promise<void>
 
+type Deferred<T> = {
+  promise: Promise<T>
+  resolve(value: T): void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function makeCompletedSelectorClient(selections: string[][]) {
+  let promptCount = 0
+  let sessionCount = 0
+  return {
+    session: {
+      async create() {
+        sessionCount += 1
+        return { data: { id: `selector-session-${sessionCount}` } }
+      },
+      async prompt() {
+        const selected = selections[promptCount] ?? selections.at(-1) ?? []
+        promptCount += 1
+        return {
+          data: {
+            info: {
+              structured: {
+                selected_memories: selected,
+              },
+            },
+            parts: [],
+          },
+        }
+      },
+      async delete() {
+        return { data: true }
+      },
+    },
+  }
+}
+
 describe("MemoryPlugin system transform", () => {
   test("suppresses memory context when user explicitly asks to ignore memory", async () => {
     const repo = makeTempGitRepo()
@@ -179,6 +228,146 @@ describe("MemoryPlugin system transform", () => {
   })
 })
 
+describe("MemoryPlugin LLM recall prefetch", () => {
+  test("does not wait for an unfinished selector and injects completed recall on the next loop", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "testing_pref", "Testing Preference", "Database integration test guidance", "feedback", "Use real databases in integration tests.")
+
+    const promptResult = deferred<unknown>()
+    const client = {
+      session: {
+        async create() {
+          return { data: { id: "selector-session" } }
+        },
+        async prompt() {
+          return promptResult.promise
+        },
+        async delete() {
+          return { data: true }
+        },
+      },
+    }
+
+    const plugin = await MemoryPlugin({ worktree: repo, directory: repo, client } as never)
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as MessagesTransform
+    const transform = plugin["experimental.chat.system.transform"] as unknown as SystemTransform
+
+    await messagesTransform(
+      {},
+      {
+        messages: [
+          {
+            info: { role: "user", sessionID: "ses_prefetch" },
+            parts: [{ type: "text", text: "How should we test database changes?" }],
+          },
+        ],
+      },
+    )
+
+    const first = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_prefetch" }, first)
+    expect(first.system[0]).toContain("## MEMORY.md")
+    expect(first.system[0]).not.toContain("## Recalled Memories")
+
+    promptResult.resolve({
+      data: {
+        info: {
+          structured: {
+            selected_memories: ["testing_pref.md"],
+          },
+        },
+        parts: [],
+      },
+    })
+    await flushPromises()
+
+    const second = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_prefetch" }, second)
+    expect(second.system[0]).toContain("## Recalled Memories")
+    expect(second.system[0]).toContain("Testing Preference")
+    expect(second.system[0]).toContain("Use real databases in integration tests.")
+  })
+
+  test("starts recall prefetch for CJK queries without spaces", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "testing_pref_cjk", "Testing Preference", "Database integration test guidance", "feedback", "Use real databases in integration tests.")
+
+    const client = makeCompletedSelectorClient([["testing_pref_cjk.md"]])
+    const plugin = await MemoryPlugin({ worktree: repo, directory: repo, client } as never)
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as MessagesTransform
+    const transform = plugin["experimental.chat.system.transform"] as unknown as SystemTransform
+
+    await messagesTransform(
+      {},
+      {
+        messages: [
+          {
+            info: { role: "user", sessionID: "ses_prefetch_cjk" },
+            parts: [{ type: "text", text: "数据库测试怎么做" }],
+          },
+        ],
+      },
+    )
+    await flushPromises()
+
+    const output = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_prefetch_cjk" }, output)
+
+    expect(output.system[0]).toContain("## Recalled Memories")
+    expect(output.system[0]).toContain("Testing Preference")
+  })
+
+  test("does not restart selector after recall is consumed in the same user turn", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "testing_pref_once", "Testing Preference", "Database integration test guidance", "feedback", "Use real databases in integration tests.")
+    saveMemory(repo, "other_pref_once", "Other Preference", "Should not be selected by a restarted selector", "feedback", "This would indicate a duplicate selector run.")
+
+    const client = makeCompletedSelectorClient([["testing_pref_once.md"], ["other_pref_once.md"]])
+    const plugin = await MemoryPlugin({ worktree: repo, directory: repo, client } as never)
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as MessagesTransform
+    const transform = plugin["experimental.chat.system.transform"] as unknown as SystemTransform
+
+    await messagesTransform(
+      {},
+      {
+        messages: [
+          {
+            info: { role: "user", sessionID: "ses_prefetch_once" },
+            parts: [{ type: "text", text: "How should we test database changes?" }],
+          },
+        ],
+      },
+    )
+    await flushPromises()
+
+    const first = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_prefetch_once" }, first)
+    expect(first.system[0]).toContain("Testing Preference")
+
+    await messagesTransform(
+      {},
+      {
+        messages: [
+          {
+            info: { role: "user", sessionID: "ses_prefetch_once" },
+            parts: [{ type: "text", text: "How should we test database changes?" }],
+          },
+          {
+            info: { role: "assistant" as string, sessionID: "ses_prefetch_once" },
+            parts: [{ type: "tool", tool: "grep", state: { status: "completed" } }],
+          },
+        ],
+      },
+    )
+    await flushPromises()
+
+    const second = { system: [] as string[] }
+    await transform({ model: "test-model", sessionID: "ses_prefetch_once" }, second)
+    expect(second.system[0]).not.toContain("## Recalled Memories")
+    expect(second.system[0]).not.toContain("This would indicate a duplicate selector run.")
+  })
+})
+
 describe("MemoryPlugin recentTools from message parts", () => {
   test("filters tool-reference memories when completed tool parts exist in messages", async () => {
     const repo = makeTempGitRepo()
@@ -245,7 +434,8 @@ describe("MemoryPlugin recentTools from message parts", () => {
     const repo = makeTempGitRepo()
     saveMemory(repo, "grep_ref3", "Grep Tool API", "Usage reference for grep tool", "reference", "How to use grep tool")
 
-    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const client = makeCompletedSelectorClient([[], ["grep_ref3.md"]])
+    const plugin = await MemoryPlugin({ worktree: repo, directory: repo, client } as never)
     const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as MessagesTransform
     const transform = plugin["experimental.chat.system.transform"] as unknown as SystemTransform
 
@@ -264,6 +454,7 @@ describe("MemoryPlugin recentTools from message parts", () => {
         ],
       },
     )
+    await flushPromises()
 
     const out1 = { system: [] as string[] }
     await transform({ model: "test-model", sessionID: "ses_compact_tools" }, out1)
@@ -285,6 +476,7 @@ describe("MemoryPlugin recentTools from message parts", () => {
         ],
       },
     )
+    await flushPromises()
 
     const out2 = { system: [] as string[] }
     await transform({ model: "test-model", sessionID: "ses_compact_tools" }, out2)
@@ -298,7 +490,8 @@ describe("MemoryPlugin alreadySurfaced tracking", () => {
     const repo = makeTempGitRepo()
     saveMemory(repo, "only_mem", "Only Memory", "The sole memory", "user", "Single memory content")
 
-    const plugin = await MemoryPlugin({ worktree: repo } as never)
+    const client = makeCompletedSelectorClient([["only_mem.md"], ["only_mem.md"]])
+    const plugin = await MemoryPlugin({ worktree: repo, directory: repo, client } as never)
     const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as MessagesTransform
     const transform = plugin["experimental.chat.system.transform"] as unknown as SystemTransform
 
@@ -308,6 +501,7 @@ describe("MemoryPlugin alreadySurfaced tracking", () => {
         parts: [{ type: "text", text: "Tell me about the only memory" }],
       }],
     })
+    await flushPromises()
 
     const output1 = { system: [] as string[] }
     await transform({ model: "test-model", sessionID: "ses_surfaced" }, output1)
@@ -326,6 +520,7 @@ describe("MemoryPlugin alreadySurfaced tracking", () => {
         },
       ],
     })
+    await flushPromises()
 
     const output2 = { system: [] as string[] }
     await transform({ model: "test-model", sessionID: "ses_surfaced" }, output2)

@@ -213,6 +213,8 @@ Yes. Set `OPENCODE_MEMORY_AUTODREAM=0`. You can also tune gates with:
 - `OPENCODE_MEMORY_TERMINAL_LOG` (default `foreground-only`): set `1` to force terminal logs on, `0` to force them off
 - `OPENCODE_MEMORY_MODEL`: override model used for extraction
 - `OPENCODE_MEMORY_AGENT`: override agent used for extraction
+- `OPENCODE_MEMORY_RECALL_MODEL`: override model used for LLM memory recall selection
+- `OPENCODE_MEMORY_RECALL_AGENT` (default `opencode-memory-recall`): override agent used for LLM memory recall selection
 - `OPENCODE_MEMORY_AUTODREAM` (default `1`): set `0` to disable auto-dream consolidation
 - `OPENCODE_MEMORY_AUTODREAM_MIN_HOURS` (default `24`): min hours between consolidation runs
 - `OPENCODE_MEMORY_AUTODREAM_MIN_SESSIONS` (default `5`): min touched sessions since last consolidation
