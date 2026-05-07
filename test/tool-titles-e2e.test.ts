@@ -69,69 +69,77 @@ async function runToolWithAfter<TArgs extends object>(
 describe("memory tool titles end-to-end", () => {
   test("persists human-readable titles across the full plugin tool lifecycle", async () => {
     const repo = makeTempGitRepo()
-    const plugin = await MemoryPlugin({ worktree: repo } as never)
-    const tools = plugin.tool as unknown as MemoryTools
-    const afterHook = plugin["tool.execute.after"] as unknown as ToolExecuteAfter
+    const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = join(repo, ".claude-test")
 
-    const save = await runToolWithAfter(
-      afterHook,
-      "memory_save",
-      tools.memory_save.execute,
-      {
-        file_name: "title_verification",
-        name: "Title Verification Test",
-        description: "Verifies final tool titles are persisted",
-        type: "reference",
-        content: "Used to validate the completed tool title in end-to-end flow.",
-      },
-      "call-save",
-    )
+    try {
+      const plugin = await MemoryPlugin({ worktree: repo } as never)
+      const tools = plugin.tool as unknown as MemoryTools
+      const afterHook = plugin["tool.execute.after"] as unknown as ToolExecuteAfter
 
-    expect(save.result).toContain("Memory saved to")
-    expect(save.title).toBe("reference: Title Verification Test")
+      const save = await runToolWithAfter(
+        afterHook,
+        "memory_save",
+        tools.memory_save.execute,
+        {
+          file_name: "title_verification",
+          name: "Title Verification Test",
+          description: "Verifies final tool titles are persisted",
+          type: "reference",
+          content: "Used to validate the completed tool title in end-to-end flow.",
+        },
+        "call-save",
+      )
 
-    const list = await runToolWithAfter(afterHook, "memory_list", tools.memory_list.execute, {}, "call-list")
-    expect(list.result).toContain("Title Verification Test")
-    expect(list.title).toBe("1 memory")
+      expect(save.result).toContain("Memory saved to")
+      expect(save.title).toBe("reference: Title Verification Test")
 
-    const search = await runToolWithAfter(
-      afterHook,
-      "memory_search",
-      tools.memory_search.execute,
-      { query: "verification" },
-      "call-search",
-    )
-    expect(search.result).toContain("Title Verification Test")
-    expect(search.title).toBe('"verification" · 1 match')
+      const list = await runToolWithAfter(afterHook, "memory_list", tools.memory_list.execute, {}, "call-list")
+      expect(list.result).toContain("Title Verification Test")
+      expect(list.title).toBe("1 memory")
 
-    const read = await runToolWithAfter(
-      afterHook,
-      "memory_read",
-      tools.memory_read.execute,
-      { file_name: "title_verification.md" },
-      "call-read",
-    )
-    expect(read.result).toContain("# Title Verification Test")
-    expect(read.title).toBe("title_verification.md")
+      const search = await runToolWithAfter(
+        afterHook,
+        "memory_search",
+        tools.memory_search.execute,
+        { query: "verification" },
+        "call-search",
+      )
+      expect(search.result).toContain("Title Verification Test")
+      expect(search.title).toBe('"verification" · 1 match')
 
-    const remove = await runToolWithAfter(
-      afterHook,
-      "memory_delete",
-      tools.memory_delete.execute,
-      { file_name: "title_verification.md" },
-      "call-delete",
-    )
-    expect(remove.result).toContain('Memory "title_verification.md" deleted.')
-    expect(remove.title).toBe("title_verification.md")
+      const read = await runToolWithAfter(
+        afterHook,
+        "memory_read",
+        tools.memory_read.execute,
+        { file_name: "title_verification.md" },
+        "call-read",
+      )
+      expect(read.result).toContain("# Title Verification Test")
+      expect(read.title).toBe("title_verification.md")
 
-    const emptyList = await runToolWithAfter(
-      afterHook,
-      "memory_list",
-      tools.memory_list.execute,
-      {},
-      "call-empty-list",
-    )
-    expect(emptyList.result).toBe("No memories saved yet.")
-    expect(emptyList.title).toBe("0 memories")
+      const remove = await runToolWithAfter(
+        afterHook,
+        "memory_delete",
+        tools.memory_delete.execute,
+        { file_name: "title_verification.md" },
+        "call-delete",
+      )
+      expect(remove.result).toContain('Memory "title_verification.md" deleted.')
+      expect(remove.title).toBe("title_verification.md")
+
+      const emptyList = await runToolWithAfter(
+        afterHook,
+        "memory_list",
+        tools.memory_list.execute,
+        {},
+        "call-empty-list",
+      )
+      expect(emptyList.result).toBe("No memories saved yet.")
+      expect(emptyList.title).toBe("0 memories")
+    } finally {
+      if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir
+    }
   })
 })

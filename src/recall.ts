@@ -17,6 +17,8 @@ const MAX_MEMORY_LINES = 200
 const MAX_MEMORY_BYTES = 4096
 
 const encoder = new TextEncoder()
+// Used only by the legacy recallRelevantMemories() keyword selector. The
+// plugin prefetch path uses the LLM selector and does not tokenize queries.
 const QUERY_STOP_WORDS = new Set([
   "the",
   "and",
