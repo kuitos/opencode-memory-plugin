@@ -190,6 +190,57 @@ exit 0
     expect(readFileSync(logPath, "utf-8")).toContain("extraction ok")
   })
 
+  test("returns immediately in background mode while session discovery waits", async () => {
+    const root = makeTempRoot()
+    const fakeBin = join(root, "bin")
+    const homeDir = join(root, "home")
+    const tmpDir = join(root, "tmp")
+    const claudeDir = join(root, "claude")
+
+    mkdirSync(fakeBin, { recursive: true })
+    mkdirSync(homeDir, { recursive: true })
+    mkdirSync(tmpDir, { recursive: true })
+    mkdirSync(claudeDir, { recursive: true })
+
+    writeExecutable(
+      join(fakeBin, "opencode"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
+  echo '[]'
+  exit 0
+fi
+if [ "\${1:-}" = "--help" ]; then
+  echo "fake help"
+  exit 0
+fi
+exit 0
+`,
+    )
+
+    const started = Date.now()
+    const result = spawnSync("bash", [scriptPath, "--help"], {
+      cwd: root,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        HOME: homeDir,
+        TMPDIR: tmpDir,
+        CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_SESSION_WAIT_SECONDS: "2",
+        OPENCODE_MEMORY_AUTODREAM: "0",
+      },
+    })
+    const elapsedMs = Date.now() - started
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain("fake help")
+    expect(elapsedMs).toBeLessThan(1000)
+
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+  })
+
   test("prints version correctly from a global-style symlinked install layout", () => {
     const root = makeTempRoot()
     const fakePrefix = join(root, "prefix")

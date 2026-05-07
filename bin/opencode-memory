@@ -1246,6 +1246,37 @@ run_post_session_tasks() {
   run_autodream_if_needed "$session_id"
 }
 
+run_post_session_for_invocation() {
+  local session_id
+  local memory_written_during_session
+
+  # Capture the session ID for this invocation. In background mode this wait
+  # must not delay the visible exit of the wrapped opencode process.
+  session_id=$(wait_for_session_target_id "$PRE_SESSION_JSON" "$SESSION_CAPTURE_STARTED_AT_MS" "$SESSION_WAIT_SECONDS" || true)
+  if [ -z "$session_id" ]; then
+    log "No session found, skipping post-session memory maintenance"
+    cleanup_timestamp
+    return 0
+  fi
+
+  # Skip if session had no real conversation (e.g. user opened TUI and exited).
+  if ! session_has_conversation "$session_id"; then
+    log "Session $session_id has no conversation, skipping post-session memory maintenance"
+    cleanup_timestamp
+    return 0
+  fi
+
+  memory_written_during_session=0
+  if has_new_memories; then
+    memory_written_during_session=1
+  fi
+
+  # Timestamp file is no longer needed after the check above.
+  cleanup_timestamp
+
+  run_post_session_tasks "$session_id" "$memory_written_during_session"
+}
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -1269,35 +1300,11 @@ if [ "$EXTRACT_ENABLED" = "0" ] && [ "$AUTODREAM_ENABLED" = "0" ]; then
   exit $opencode_exit
 fi
 
-# Step 3: Capture the session ID for this invocation
-session_id=$(wait_for_session_target_id "$PRE_SESSION_JSON" "$SESSION_CAPTURE_STARTED_AT_MS" "$SESSION_WAIT_SECONDS" || true)
-if [ -z "$session_id" ]; then
-  log "No session found, skipping post-session memory maintenance"
-  cleanup_timestamp
-  exit $opencode_exit
-fi
-
-# Step 3.5: Skip if session had no real conversation (e.g. user opened TUI and exited)
-if ! session_has_conversation "$session_id"; then
-  log "Session $session_id has no conversation, skipping post-session memory maintenance"
-  cleanup_timestamp
-  exit $opencode_exit
-fi
-
-# Step 4: Check whether main session already wrote memory files
-memory_written_during_session=0
-if has_new_memories; then
-  memory_written_during_session=1
-fi
-
-# Timestamp file is no longer needed after the check above.
-cleanup_timestamp
-
-# Step 5: Run tasks (foreground for debug, background by default)
+# Step 3: Run post-session maintenance (foreground for debug, background by default).
 if [ "$FOREGROUND" = "1" ]; then
-  run_post_session_tasks "$session_id" "$memory_written_during_session"
+  run_post_session_for_invocation
 else
-  run_post_session_tasks "$session_id" "$memory_written_during_session" &
+  run_post_session_for_invocation &
   disown
   log "Post-session memory maintenance started in background (PID $!)"
 fi
