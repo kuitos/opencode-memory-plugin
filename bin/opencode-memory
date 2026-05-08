@@ -1128,15 +1128,41 @@ session_has_conversation() {
 
 transcript_fingerprint() {
   local transcript_file="$1"
-  local byte_count line_count
+  local stat_output
 
   if [ ! -f "$transcript_file" ]; then
     return 1
   fi
 
-  byte_count=$(wc -c < "$transcript_file" | tr -d '[:space:]')
-  line_count=$(wc -l < "$transcript_file" | tr -d '[:space:]')
-  printf '%s\t%s\n' "$byte_count" "$line_count"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$transcript_file" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+
+try:
+    file_stat = os.stat(path)
+except OSError:
+    raise SystemExit(1)
+
+mtime = getattr(file_stat, "st_mtime_ns", int(file_stat.st_mtime * 1_000_000_000))
+print(f"{file_stat.st_size}\t{mtime}")
+PY
+    return $?
+  fi
+
+  if stat_output=$(stat -f '%z	%m' "$transcript_file" 2>/dev/null); then
+    printf '%s\n' "$stat_output"
+    return 0
+  fi
+
+  if stat_output=$(stat -c '%s	%Y' "$transcript_file" 2>/dev/null); then
+    printf '%s\n' "$stat_output"
+    return 0
+  fi
+
+  return 1
 }
 
 write_transcript_checkpoint() {
@@ -1146,6 +1172,38 @@ write_transcript_checkpoint() {
 
   : > "$output_file"
   [ -d "$transcripts_dir" ] || return 0
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$transcripts_dir" > "$output_file" <<'PY'
+import os
+import stat
+import sys
+
+transcripts_dir = sys.argv[1]
+
+try:
+    filenames = os.listdir(transcripts_dir)
+except OSError:
+    raise SystemExit(0)
+
+for filename in filenames:
+    if not filename.endswith(".jsonl"):
+        continue
+    path = os.path.join(transcripts_dir, filename)
+    try:
+        file_stat = os.stat(path)
+    except OSError:
+        continue
+    if not stat.S_ISREG(file_stat.st_mode):
+        continue
+    session_id = filename[:-6]
+    if not session_id:
+        continue
+    mtime = getattr(file_stat, "st_mtime_ns", int(file_stat.st_mtime * 1_000_000_000))
+    print(f"{session_id}\t{file_stat.st_size}\t{mtime}")
+PY
+    return 0
+  fi
 
   find "$transcripts_dir" -maxdepth 1 -type f -name '*.jsonl' -print 2>/dev/null | while IFS= read -r transcript_file; do
     local filename session_id fingerprint

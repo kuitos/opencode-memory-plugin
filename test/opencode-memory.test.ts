@@ -300,6 +300,60 @@ exit 0
     expect(existsSync(stateFile)).toBe(false)
   })
 
+  test("snapshots many transcripts without per-file process overhead", () => {
+    const root = makeTempRoot()
+    const fakeBin = join(root, "bin")
+    const homeDir = join(root, "home")
+    const tmpDir = join(root, "tmp")
+    const claudeDir = join(root, "claude")
+    const transcriptsDir = join(claudeDir, "transcripts")
+
+    mkdirSync(fakeBin, { recursive: true })
+    mkdirSync(homeDir, { recursive: true })
+    mkdirSync(tmpDir, { recursive: true })
+    mkdirSync(transcriptsDir, { recursive: true })
+
+    for (let index = 0; index < 1000; index += 1) {
+      writeFileSync(
+        join(transcriptsDir, `ses_perf_${index}.jsonl`),
+        '{"type":"user","content":"old prompt"}\n{"type":"assistant","content":"old answer"}\n',
+        "utf-8",
+      )
+    }
+
+    writeExecutable(
+      join(fakeBin, "opencode"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "session" ] && [ "\${2:-}" = "list" ]; then
+  echo '[]'
+  exit 0
+fi
+exit 0
+`,
+    )
+
+    const started = Date.now()
+    const result = spawnSync("bash", [scriptPath, "noop"], {
+      cwd: root,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        HOME: homeDir,
+        TMPDIR: tmpDir,
+        CLAUDE_CONFIG_DIR: claudeDir,
+        OPENCODE_MEMORY_EXTRACT: "0",
+        OPENCODE_MEMORY_AUTODREAM: "0",
+        OPENCODE_MEMORY_TERMINAL_LOG: "0",
+      },
+    })
+    const elapsedMs = Date.now() - started
+
+    expect(result.status).toBe(0)
+    expect(elapsedMs).toBeLessThan(1500)
+  }, 10000)
+
   test("prints version correctly from a global-style symlinked install layout", () => {
     const root = makeTempRoot()
     const fakePrefix = join(root, "prefix")
