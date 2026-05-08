@@ -441,7 +441,7 @@ has_new_memories() {
 }
 
 cleanup_timestamp() {
-  rm -f "$TIMESTAMP_FILE"
+  rm -f "$TIMESTAMP_FILE" "${TRANSCRIPT_CHECKPOINT_FILE:-}"
 }
 
 get_session_list_json() {
@@ -1126,6 +1126,64 @@ session_has_conversation() {
   return 0
 }
 
+transcript_fingerprint() {
+  local transcript_file="$1"
+  local byte_count line_count
+
+  if [ ! -f "$transcript_file" ]; then
+    return 1
+  fi
+
+  byte_count=$(wc -c < "$transcript_file" | tr -d '[:space:]')
+  line_count=$(wc -l < "$transcript_file" | tr -d '[:space:]')
+  printf '%s\t%s\n' "$byte_count" "$line_count"
+}
+
+write_transcript_checkpoint() {
+  local output_file="$1"
+  local transcripts_dir
+  transcripts_dir="$(get_transcripts_dir)"
+
+  : > "$output_file"
+  [ -d "$transcripts_dir" ] || return 0
+
+  find "$transcripts_dir" -maxdepth 1 -type f -name '*.jsonl' -print 2>/dev/null | while IFS= read -r transcript_file; do
+    local filename session_id fingerprint
+    filename="$(basename "$transcript_file")"
+    session_id="${filename%.jsonl}"
+    fingerprint="$(transcript_fingerprint "$transcript_file" || true)"
+    [ -n "$session_id" ] && [ -n "$fingerprint" ] || continue
+    printf '%s\t%s\n' "$session_id" "$fingerprint"
+  done > "$output_file"
+}
+
+read_transcript_checkpoint() {
+  local session_id="$1"
+
+  [ -f "$TRANSCRIPT_CHECKPOINT_FILE" ] || return 1
+  awk -F '\t' -v id="$session_id" '$1 == id { print $2 "\t" $3; found=1; exit } END { exit found ? 0 : 1 }' "$TRANSCRIPT_CHECKPOINT_FILE"
+}
+
+session_has_incremental_activity() {
+  local session_id="$1"
+  local transcript_file previous current
+  transcript_file="$(get_transcripts_dir)/${session_id}.jsonl"
+
+  if [ -f "$transcript_file" ]; then
+    current="$(transcript_fingerprint "$transcript_file" || true)"
+    previous="$(read_transcript_checkpoint "$session_id" || true)"
+    if [ -z "$previous" ]; then
+      return 0
+    fi
+    [ "$current" != "$previous" ]
+    return $?
+  fi
+
+  # If no transcript is available, keep the existing conservative behavior:
+  # session_diff/session-list discovery may still have found a valid new turn.
+  return 0
+}
+
 run_extraction_if_needed() {
   local session_id="$1"
   local memory_written_during_session="$2"
@@ -1266,6 +1324,12 @@ run_post_session_for_invocation() {
     return 0
   fi
 
+  if ! session_has_incremental_activity "$session_id"; then
+    log "Session $session_id has no new transcript activity, skipping post-session memory maintenance"
+    cleanup_timestamp
+    return 0
+  fi
+
   memory_written_during_session=0
   if has_new_memories; then
     memory_written_during_session=1
@@ -1283,6 +1347,8 @@ run_post_session_for_invocation() {
 
 # Step 0: Create timestamp marker before running opencode
 TIMESTAMP_FILE=$(mktemp)
+TRANSCRIPT_CHECKPOINT_FILE=$(mktemp)
+write_transcript_checkpoint "$TRANSCRIPT_CHECKPOINT_FILE"
 SESSION_CAPTURE_STARTED_AT_MS=$(( $(date +%s) * 1000 ))
 PRE_SESSION_JSON=$(get_session_list_json "$AUTODREAM_SCAN_LIMIT" 2>/dev/null || true)
 
