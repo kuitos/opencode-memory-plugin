@@ -20,6 +20,9 @@ const SELECT_MEMORIES_FORMAT = {
   },
 } as const
 
+export const UNSUPPORTED_RECALL_SELECTOR_CLIENT_MESSAGE =
+  "opencode-claude-memory LLM recall requires an OpenCode SDK with structured output session.prompt support. Please upgrade OpenCode/@opencode-ai/plugin."
+
 export type SessionClient = {
   session?: {
     create?: (...args: unknown[]) => Promise<unknown>
@@ -87,13 +90,22 @@ function extractSelectedMemories(response: unknown): string[] {
   return []
 }
 
-function isV2SessionAPI(client: SessionClient): boolean {
-  const session = client.session
+export function isSupportedRecallSelectorClient(client: SessionClient | undefined): boolean {
+  const session = client?.session
   return Boolean(
     session?.create &&
       session?.prompt &&
-      (session.create.length >= 2 || session.prompt.length >= 2),
+      session?.delete &&
+      session.create.length >= 2 &&
+      session.prompt.length >= 2 &&
+      session.delete.length >= 2,
   )
+}
+
+export function assertSupportedRecallSelectorClient(client: SessionClient | undefined): asserts client is SessionClient {
+  if (!isSupportedRecallSelectorClient(client)) {
+    throw new Error(UNSUPPORTED_RECALL_SELECTOR_CLIENT_MESSAGE)
+  }
 }
 
 async function createSelectorSession(
@@ -101,22 +113,13 @@ async function createSelectorSession(
   directory: string,
   parentSessionID: string,
 ): Promise<string | undefined> {
-  const create = client.session?.create
-  if (!create) return undefined
+  if (!client.session?.create) return undefined
 
-  const response = isV2SessionAPI(client)
-    ? await create({
-      directory,
-      parentID: parentSessionID,
-      title: "opencode-memory recall selector",
-    })
-    : await create({
-      body: {
-        parentID: parentSessionID,
-        title: "opencode-memory recall selector",
-      },
-      query: { directory },
-    })
+  const response = await client.session.create({
+    directory,
+    parentID: parentSessionID,
+    title: "opencode-memory recall selector",
+  })
 
   return extractSessionID(response)
 }
@@ -129,8 +132,7 @@ async function promptSelectorSession(
   model: { providerID: string; modelID: string } | undefined,
   content: string,
 ): Promise<unknown> {
-  const prompt = client.session?.prompt
-  if (!prompt) return undefined
+  if (!client.session?.prompt) return undefined
 
   const body = {
     agent,
@@ -141,13 +143,7 @@ async function promptSelectorSession(
     parts: [{ type: "text", text: content }],
   }
 
-  return isV2SessionAPI(client)
-    ? prompt({ sessionID, directory, ...body })
-    : prompt({
-      path: { id: sessionID },
-      query: { directory },
-      body,
-    })
+  return client.session.prompt({ sessionID, directory, ...body })
 }
 
 async function deleteSelectorSession(
@@ -155,15 +151,10 @@ async function deleteSelectorSession(
   sessionID: string,
   directory: string,
 ): Promise<void> {
-  const deleteSession = client.session?.delete
-  if (!deleteSession) return
+  if (!client.session?.delete) return
 
   try {
-    if (isV2SessionAPI(client)) {
-      await deleteSession({ sessionID, directory })
-    } else {
-      await deleteSession({ path: { id: sessionID }, query: { directory } })
-    }
+    await client.session.delete({ sessionID, directory })
   } catch {
     // Best-effort cleanup. A failed selector deletion should not affect recall.
   }
@@ -172,7 +163,8 @@ async function deleteSelectorSession(
 export async function selectRelevantMemoryFilenames(
   input: SelectRelevantMemoryFilenamesInput,
 ): Promise<string[]> {
-  if (!input.client?.session || input.memories.length === 0) return []
+  if (input.memories.length === 0) return []
+  assertSupportedRecallSelectorClient(input.client)
 
   let selectorSessionID: string | undefined
   try {

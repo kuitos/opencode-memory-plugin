@@ -60,11 +60,11 @@ function makeCompletedSelectorClient(selections: string[][]) {
   let sessionCount = 0
   return {
     session: {
-      async create() {
+      async create(_parameters?: unknown, _requestOptions?: unknown) {
         sessionCount += 1
         return { data: { id: `selector-session-${sessionCount}` } }
       },
-      async prompt() {
+      async prompt(_parameters: unknown, _requestOptions?: unknown) {
         const selected = selections[promptCount] ?? selections.at(-1) ?? []
         promptCount += 1
         return {
@@ -78,7 +78,7 @@ function makeCompletedSelectorClient(selections: string[][]) {
           },
         }
       },
-      async delete() {
+      async delete(_parameters: unknown, _requestOptions?: unknown) {
         return { data: true }
       },
     },
@@ -229,6 +229,47 @@ describe("MemoryPlugin system transform", () => {
 })
 
 describe("MemoryPlugin LLM recall prefetch", () => {
+  test("fails fast when recall prefetch receives an unsupported session client", async () => {
+    const repo = makeTempGitRepo()
+    saveMemory(repo, "testing_pref_unsupported", "Testing Preference", "Database integration test guidance", "feedback", "Use real databases in integration tests.")
+    const client = {
+      session: {
+        async create(_parameters?: unknown) {
+          return { data: { id: "selector-session" } }
+        },
+        async prompt(_parameters: unknown) {
+          return { data: { parts: [] } }
+        },
+        async delete(_parameters: unknown) {
+          return { data: true }
+        },
+      },
+    }
+
+    const plugin = await MemoryPlugin({ worktree: repo, directory: repo, client } as never)
+    const messagesTransform = plugin["experimental.chat.messages.transform"] as unknown as MessagesTransform
+
+    let error: unknown
+    try {
+      await messagesTransform(
+        {},
+        {
+          messages: [
+            {
+              info: { role: "user", sessionID: "ses_unsupported_prefetch" },
+              parts: [{ type: "text", text: "How should we test database changes?" }],
+            },
+          ],
+        },
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain("requires an OpenCode SDK with structured output session.prompt support")
+  })
+
   test("does not wait for an unfinished selector and injects completed recall on the next loop", async () => {
     const repo = makeTempGitRepo()
     saveMemory(repo, "testing_pref", "Testing Preference", "Database integration test guidance", "feedback", "Use real databases in integration tests.")
@@ -236,13 +277,13 @@ describe("MemoryPlugin LLM recall prefetch", () => {
     const promptResult = deferred<unknown>()
     const client = {
       session: {
-        async create() {
+        async create(_parameters?: unknown, _requestOptions?: unknown) {
           return { data: { id: "selector-session" } }
         },
-        async prompt() {
+        async prompt(_parameters: unknown, _requestOptions?: unknown) {
           return promptResult.promise
         },
-        async delete() {
+        async delete(_parameters: unknown, _requestOptions?: unknown) {
           return { data: true }
         },
       },

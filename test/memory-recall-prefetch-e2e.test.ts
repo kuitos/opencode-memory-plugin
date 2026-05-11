@@ -66,7 +66,7 @@ async function flushPromises(): Promise<void> {
 }
 
 function selectorPromptText(options: unknown): string {
-  const parts = (options as { body?: { parts?: Array<{ text?: string }> } }).body?.parts
+  const parts = (options as { parts?: Array<{ text?: string }> }).parts
   return parts?.[0]?.text ?? ""
 }
 
@@ -82,11 +82,11 @@ function makeManifestSelectingClient() {
     calls,
     client: {
       session: {
-        async create() {
+        async create(_parameters?: unknown, _requestOptions?: unknown) {
           calls.create += 1
           return { data: { id: `selector-session-${calls.create}` } }
         },
-        async prompt(options: unknown) {
+        async prompt(options: unknown, _requestOptions?: unknown) {
           calls.prompt += 1
           calls.promptText = selectorPromptText(options)
           const selected = calls.promptText.includes("database_rules.md") ? ["database_rules.md"] : []
@@ -102,7 +102,7 @@ function makeManifestSelectingClient() {
             },
           }
         },
-        async delete() {
+        async delete(_parameters: unknown, _requestOptions?: unknown) {
           calls.delete += 1
           return { data: true }
         },
