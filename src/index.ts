@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
+import { parse, resolve } from "path"
 import { buildMemorySystemPrompt } from "./prompt.js"
 import { formatRecalledMemories, recallSelectedMemories, type RecalledMemory } from "./recall.js"
 import { assertSupportedRecallSelectorClient, selectRelevantMemoryFilenames, type SessionClient } from "./recallSelector.js"
@@ -154,6 +155,16 @@ function getRecallModel(): { providerID: string; modelID: string } | undefined {
   }
 }
 
+function isRootPath(path: string): boolean {
+  const resolved = resolve(path)
+  return resolved === parse(resolved).root
+}
+
+function resolveMemoryRoot(worktree: string, directory: string): string {
+  if (isRootPath(worktree) && !isRootPath(directory)) return directory
+  return worktree
+}
+
 function isUsefulRecallQuery(query: string | undefined): query is string {
   const trimmed = query?.trim()
   if (!trimmed) return false
@@ -283,7 +294,8 @@ function getCallID(ctx: unknown): string | undefined {
 
 export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
   directory ??= worktree
-  getMemoryDir(worktree)
+  const memoryRoot = resolveMemoryRoot(worktree, directory)
+  getMemoryDir(memoryRoot)
 
   return {
     config: async (config) => {
@@ -348,7 +360,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
             : startRecallPrefetch({
               client: client as unknown as SessionClient,
               directory,
-              worktree,
+              worktree: memoryRoot,
               parentSessionID: sessionID,
               turnID,
               query,
@@ -389,7 +401,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
       const recalled = ignoreMemoryContext ? [] : consumeRecallPrefetch(ctx)
 
       const recalledSection = formatRecalledMemories(recalled)
-      const memoryPrompt = buildMemorySystemPrompt(worktree, recalledSection, {
+      const memoryPrompt = buildMemorySystemPrompt(memoryRoot, recalledSection, {
         includeIndex: !ignoreMemoryContext,
       })
       output.system.push(memoryPrompt)
@@ -426,7 +438,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
             ),
         },
         async execute(args, _ctx) {
-          const filePath = saveMemory(worktree, args.file_name, args.name, args.description, args.type, args.content)
+          const filePath = saveMemory(memoryRoot, args.file_name, args.name, args.description, args.type, args.content)
           return `Memory saved to ${filePath}`
         },
       }),
@@ -437,7 +449,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
           file_name: tool.schema.string().describe("File name of the memory to delete (with or without .md extension)"),
         },
         async execute(args, _ctx) {
-          const deleted = deleteMemory(worktree, args.file_name)
+          const deleted = deleteMemory(memoryRoot, args.file_name)
           return deleted ? `Memory "${args.file_name}" deleted.` : `Memory "${args.file_name}" not found.`
         },
       }),
@@ -449,7 +461,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
           "or when you need to recall what's been stored.",
         args: {},
         async execute(_args, ctx) {
-          const entries = listMemories(worktree)
+          const entries = listMemories(memoryRoot)
           const callID = getCallID(ctx)
           if (callID) memoryListCountByCallID.set(callID, entries.length)
           if (entries.length === 0) {
@@ -470,7 +482,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
           query: tool.schema.string().describe("Search query — searches across name, description, and content"),
         },
         async execute(args, ctx) {
-          const results = searchMemories(worktree, args.query)
+          const results = searchMemories(memoryRoot, args.query)
           const callID = getCallID(ctx)
           if (callID) memorySearchCountByCallID.set(callID, results.length)
           if (results.length === 0) {
@@ -489,7 +501,7 @@ export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
           file_name: tool.schema.string().describe("File name of the memory to read (with or without .md extension)"),
         },
         async execute(args, _ctx) {
-          const entry = readMemory(worktree, args.file_name)
+          const entry = readMemory(memoryRoot, args.file_name)
           if (!entry) {
             return `Memory "${args.file_name}" not found.`
           }
