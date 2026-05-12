@@ -4,12 +4,19 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { MemoryPlugin } from "../src/index.js"
 import { saveMemory } from "../src/memory.js"
+import { getMemoryDir } from "../src/paths.js"
 
 const tempDirs: string[] = []
 
 function makeTempGitRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "index-test-"))
   mkdirSync(join(root, ".git"), { recursive: true })
+  tempDirs.push(root)
+  return root
+}
+
+function makeTempProject(): string {
+  const root = mkdtempSync(join(tmpdir(), "index-test-project-"))
   tempDirs.push(root)
   return root
 }
@@ -86,6 +93,31 @@ function makeCompletedSelectorClient(selections: string[][]) {
 }
 
 describe("MemoryPlugin system transform", () => {
+  test("uses directory as memory root when OpenCode reports root worktree", async () => {
+    const project = makeTempProject()
+    const configDir = mkdtempSync(join(tmpdir(), "index-test-claude-"))
+    tempDirs.push(configDir)
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = configDir
+
+    try {
+      const expectedMemoryDir = getMemoryDir(project)
+      const rootMemoryDir = getMemoryDir("/")
+      const plugin = await MemoryPlugin({ worktree: "/", directory: project } as never)
+      const transform = plugin["experimental.chat.system.transform"] as unknown as SystemTransform
+      const output = { system: [] as string[] }
+
+      await transform({ model: "test-model", sessionID: "ses_root_worktree" }, output)
+
+      expect(output.system).toHaveLength(1)
+      expect(output.system[0]).toContain(expectedMemoryDir)
+      expect(output.system[0]).not.toContain(rootMemoryDir)
+    } finally {
+      if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    }
+  })
+
   test("suppresses memory context when user explicitly asks to ignore memory", async () => {
     const repo = makeTempGitRepo()
     saveMemory(repo, "hidden", "Hidden Memory", "Should be ignored", "user", "Secret context")
