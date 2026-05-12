@@ -1,7 +1,9 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import { buildMemorySystemPrompt } from "./prompt.js"
-import { recallRelevantMemories, formatRecalledMemories } from "./recall.js"
+import { formatRecalledMemories, recallSelectedMemories, type RecalledMemory } from "./recall.js"
+import { assertSupportedRecallSelectorClient, selectRelevantMemoryFilenames, type SessionClient } from "./recallSelector.js"
+import { scanMemoryFiles, type MemoryHeader } from "./memoryScan.js"
 import {
   saveMemory,
   deleteMemory,
@@ -17,12 +19,22 @@ import { getMemoryDir } from "./paths.js"
 // resets both alreadySurfaced and recentTools (the messages shrink after compact,
 // so the derived state shrinks with them).
 type TurnContext = {
+  turnID: string
   query?: string
   alreadySurfaced: Set<string>
   recentTools: string[]
+  recallPrefetch?: RecallPrefetch
+}
+
+type RecallPrefetch = {
+  turnID: string
+  settled: boolean
+  consumed: boolean
+  result: RecalledMemory[]
 }
 
 const turnContextBySession = new Map<string, TurnContext>()
+const selectorSessionIDs = new Set<string>()
 
 function shouldIgnoreMemoryContext(query: string | undefined): boolean {
   if (process.env.OPENCODE_MEMORY_IGNORE === "1") return true
@@ -64,9 +76,11 @@ function extractUserQuery(message: unknown): string | undefined {
   return undefined
 }
 
-function getLastUserQuery(messages: Array<{ info?: { role?: unknown; sessionID?: unknown }; parts?: unknown }>): {
+function getLastUserQuery(messages: Array<{ info?: { id?: unknown; role?: unknown; sessionID?: unknown }; parts?: unknown }>): {
   query?: string
   sessionID?: string
+  messageID?: string
+  messageIndex?: number
 } {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
@@ -74,7 +88,8 @@ function getLastUserQuery(messages: Array<{ info?: { role?: unknown; sessionID?:
 
     const query = extractUserQuery(message)
     const sessionID = typeof message.info?.sessionID === "string" ? message.info.sessionID : undefined
-    return { query, sessionID }
+    const messageID = typeof message.info?.id === "string" ? message.info.id : undefined
+    return { query, sessionID, messageID, messageIndex: i }
   }
 
   return {}
@@ -121,6 +136,98 @@ function extractRecentTools(
     }
   }
   return tools
+}
+
+function getRecallAgent(): string {
+  return process.env.OPENCODE_MEMORY_RECALL_AGENT || "opencode-memory-recall"
+}
+
+function getRecallModel(): { providerID: string; modelID: string } | undefined {
+  const raw = process.env.OPENCODE_MEMORY_RECALL_MODEL
+  if (!raw) return undefined
+
+  const slashIdx = raw.indexOf("/")
+  if (slashIdx <= 0 || slashIdx === raw.length - 1) return undefined
+  return {
+    providerID: raw.slice(0, slashIdx),
+    modelID: raw.slice(slashIdx + 1),
+  }
+}
+
+function isUsefulRecallQuery(query: string | undefined): query is string {
+  const trimmed = query?.trim()
+  if (!trimmed) return false
+  if (/\s/.test(trimmed)) return true
+  return /[\u3400-\u9fff]/.test(trimmed) && trimmed.length >= 4
+}
+
+function buildTurnID(
+  sessionID: string,
+  messageID: string | undefined,
+  messageIndex: number | undefined,
+  query: string | undefined,
+): string {
+  return `${sessionID}:${messageID ?? `${messageIndex ?? -1}:${query ?? ""}`}`
+}
+
+function alreadySurfacedKey(header: MemoryHeader): string {
+  return `${header.name ?? header.filename.replace(/\.md$/, "").replace(/.*\//, "")}|${header.type ?? "user"}`
+}
+
+function startRecallPrefetch(input: {
+  client: SessionClient | undefined
+  directory: string
+  worktree: string
+  parentSessionID: string
+  turnID: string
+  query: string | undefined
+  alreadySurfaced: ReadonlySet<string>
+  recentTools: readonly string[]
+}): RecallPrefetch | undefined {
+  if (!input.client || !isUsefulRecallQuery(input.query)) return undefined
+
+  assertSupportedRecallSelectorClient(input.client)
+
+  const memoryDir = getMemoryDir(input.worktree)
+  const headers = scanMemoryFiles(memoryDir).filter((header) => !input.alreadySurfaced.has(alreadySurfacedKey(header)))
+  if (headers.length === 0) return undefined
+
+  const handle: RecallPrefetch = {
+    turnID: input.turnID,
+    settled: false,
+    consumed: false,
+    result: [],
+  }
+
+  const promise = selectRelevantMemoryFilenames({
+    client: input.client,
+    directory: input.directory,
+    parentSessionID: input.parentSessionID,
+    query: input.query,
+    memories: headers,
+    recentTools: input.recentTools,
+    selectorSessionIDs,
+    agent: getRecallAgent(),
+    model: getRecallModel(),
+  })
+    .then((selectedFilenames) => recallSelectedMemories(headers, selectedFilenames, input.alreadySurfaced))
+    .catch(() => [])
+
+  void promise.then((result) => {
+    handle.result = result
+  }).finally(() => {
+    handle.settled = true
+  })
+
+  return handle
+}
+
+function consumeRecallPrefetch(ctx: TurnContext | undefined): RecalledMemory[] {
+  const prefetch = ctx?.recallPrefetch
+  if (!prefetch || !prefetch.settled || prefetch.consumed) return []
+
+  prefetch.consumed = true
+  return prefetch.result
 }
 
 // Tracks how many memory entries a memory_list call saw so tool.execute.after
@@ -174,10 +281,33 @@ function getCallID(ctx: unknown): string | undefined {
   return typeof v === "string" ? v : undefined
 }
 
-export const MemoryPlugin: Plugin = async ({ worktree }) => {
+export const MemoryPlugin: Plugin = async ({ worktree, directory, client }) => {
+  directory ??= worktree
   getMemoryDir(worktree)
 
   return {
+    config: async (config) => {
+      const agentName = getRecallAgent()
+      const mutable = config as {
+        agent?: Record<string, Record<string, unknown>>
+      }
+      mutable.agent ??= {}
+      mutable.agent[agentName] ??= {
+        mode: "all",
+        hidden: true,
+        prompt: "Select up to 5 relevant memory filenames for the current user query. Return only the requested structured output.",
+      }
+    },
+
+    "chat.params": async (input, output) => {
+      if (input.agent !== getRecallAgent()) return
+      output.temperature = 0
+      output.options = {
+        ...output.options,
+        maxOutputTokens: 256,
+      }
+    },
+
     "tool.execute.after": async (input, output) => {
       if (!input.tool.startsWith("memory_")) return
       const title = buildMemoryToolTitle(input.tool, input.args, input.callID)
@@ -185,7 +315,8 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
     },
 
     "experimental.chat.messages.transform": async (_input, output) => {
-      const { query, sessionID } = getLastUserQuery(output.messages)
+      const { query, sessionID, messageID, messageIndex } = getLastUserQuery(output.messages)
+      if (sessionID && selectorSessionIDs.has(sessionID)) return
 
       if (sessionID) {
         const alreadySurfaced = new Set<string>()
@@ -207,7 +338,26 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
           output.messages as Array<{ info?: { role?: unknown }; parts?: unknown[] }>,
         )
 
-        turnContextBySession.set(sessionID, { query, alreadySurfaced, recentTools })
+        const turnID = buildTurnID(sessionID, messageID, messageIndex, query)
+        const existing = turnContextBySession.get(sessionID)
+        const ignoreMemoryContext = process.env.OPENCODE_MEMORY_IGNORE === "1" || shouldIgnoreMemoryContext(query)
+        let recallPrefetch: RecallPrefetch | undefined
+        if (!ignoreMemoryContext) {
+          recallPrefetch = existing?.turnID === turnID
+            ? existing.recallPrefetch
+            : startRecallPrefetch({
+              client: client as unknown as SessionClient,
+              directory,
+              worktree,
+              parentSessionID: sessionID,
+              turnID,
+              query,
+              alreadySurfaced,
+              recentTools,
+            })
+        }
+
+        turnContextBySession.set(sessionID, { turnID, query, alreadySurfaced, recentTools, recallPrefetch })
       }
 
       if (shouldIgnoreMemoryContext(query)) {
@@ -226,18 +376,17 @@ export const MemoryPlugin: Plugin = async ({ worktree }) => {
     "experimental.chat.system.transform": async (_input, output) => {
       let sessionID: string | undefined
       if (_input && typeof _input === "object") {
-        sessionID = (typeof (_input as { sessionID?: unknown }).sessionID === "string"
+        sessionID = typeof (_input as { sessionID?: unknown }).sessionID === "string"
           ? (_input as { sessionID?: string }).sessionID
-          : undefined)
+          : undefined
       }
+      if (sessionID && selectorSessionIDs.has(sessionID)) return
 
       const ctx = sessionID ? turnContextBySession.get(sessionID) : undefined
       const query = ctx?.query
-      const alreadySurfaced = ctx?.alreadySurfaced ?? new Set<string>()
-      const recentTools = ctx?.recentTools ?? []
 
       const ignoreMemoryContext = process.env.OPENCODE_MEMORY_IGNORE === "1" || shouldIgnoreMemoryContext(query)
-      const recalled = ignoreMemoryContext ? [] : recallRelevantMemories(worktree, query, alreadySurfaced, recentTools)
+      const recalled = ignoreMemoryContext ? [] : consumeRecallPrefetch(ctx)
 
       const recalledSection = formatRecalledMemories(recalled)
       const memoryPrompt = buildMemorySystemPrompt(worktree, recalledSection, {
