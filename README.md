@@ -1,6 +1,6 @@
 <div align="center">
 
-# OpenCode plugin for Claude Code memory
+# 🧠 Claude Code-compatible memory for OpenCode
 
 **Persistent, local-first shared memory for OpenCode and Claude Code — zero config and no migration required.**
 
